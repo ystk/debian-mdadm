@@ -75,7 +75,7 @@ char DefaultConfFile[] = CONFFILE;
 char DefaultAltConfFile[] = CONFFILE2;
 
 enum linetype { Devices, Array, Mailaddr, Mailfrom, Program, CreateDev,
-		Homehost, AutoMode, LTEnd };
+		Homehost, AutoMode, Policy, PartPolicy, LTEnd };
 char *keywords[] = {
 	[Devices]  = "devices",
 	[Array]    = "array",
@@ -85,6 +85,8 @@ char *keywords[] = {
 	[CreateDev]= "create",
 	[Homehost] = "homehost",
 	[AutoMode] = "auto",
+	[Policy]   = "policy",
+	[PartPolicy]="part-policy",
 	[LTEnd]    = NULL
 };
 
@@ -104,84 +106,6 @@ int match_keyword(char *word)
 			return n;
 	}
 	return -1;
-}
-
-/* conf_word gets one word from the conf file.
- * if "allow_key", then accept words at the start of a line,
- * otherwise stop when such a word is found.
- * We assume that the file pointer is at the end of a word, so the
- * next character is a space, or a newline.  If not, it is the start of a line.
- */
-
-char *conf_word(FILE *file, int allow_key)
-{
-	int wsize = 100;
-	int len = 0;
-	int c;
-	int quote;
-	int wordfound = 0;
-	char *word = malloc(wsize);
-
-	if (!word) abort();
-
-	while (wordfound==0) {
-		/* at the end of a word.. */
-		c = getc(file);
-		if (c == '#')
-			while (c != EOF && c != '\n')
-				c = getc(file);
-		if (c == EOF) break;
-		if (c == '\n') continue;
-
-		if (c != ' ' && c != '\t' && ! allow_key) {
-			ungetc(c, file);
-			break;
-		}
-		/* looks like it is safe to get a word here, if there is one */
-		quote = 0;
-		/* first, skip any spaces */
-		while (c == ' ' || c == '\t')
-			c = getc(file);
-		if (c != EOF && c != '\n' && c != '#') {
-			/* we really have a character of a word, so start saving it */
-			while (c != EOF && c != '\n' && (quote || (c!=' ' && c != '\t'))) {
-				wordfound = 1;
-				if (quote && c == quote) quote = 0;
-				else if (quote == 0 && (c == '\'' || c == '"'))
-					quote = c;
-				else {
-					if (len == wsize-1) {
-						wsize += 100;
-						word = realloc(word, wsize);
-						if (!word) abort();
-					}
-					word[len++] = c;
-				}
-				c = getc(file);
-				/* Hack for broken kernels (2.6.14-.24) that put
-				 *        "active(auto-read-only)"
-				 * in /proc/mdstat instead of
-				 *        "active (auto-read-only)"
-				 */
-				if (c == '(' && len >= 6
-				    && strncmp(word+len-6, "active", 6) == 0)
-					c = ' ';
-			}
-		}
-		if (c != EOF) ungetc(c, file);
-	}
-	word[len] = 0;
-
-	/* Further HACK for broken kernels.. 2.6.14-2.6.24 */
-	if (strcmp(word, "auto-read-only)") == 0)
-		strcpy(word, "(auto-read-only)");
-
-/*    printf("word is <%s>\n", word); */
-	if (!wordfound) {
-		free(word);
-		word = NULL;
-	}
-	return word;
 }
 
 /*
@@ -229,11 +153,11 @@ struct conf_dev {
     char *name;
 } *cdevlist = NULL;
 
-mddev_dev_t load_partitions(void)
+struct mddev_dev *load_partitions(void)
 {
 	FILE *f = fopen("/proc/partitions", "r");
 	char buf[1024];
-	mddev_dev_t rv = NULL;
+	struct mddev_dev *rv = NULL;
 	if (f == NULL) {
 		fprintf(stderr, Name ": cannot open /proc/partitions\n");
 		return NULL;
@@ -241,7 +165,7 @@ mddev_dev_t load_partitions(void)
 	while (fgets(buf, 1024, f)) {
 		int major, minor;
 		char *name, *mp;
-		mddev_dev_t d;
+		struct mddev_dev *d;
 
 		buf[1023] = '\0';
 		if (buf[0] != ' ')
@@ -258,19 +182,18 @@ mddev_dev_t load_partitions(void)
 		d->devname = strdup(name);
 		d->next = rv;
 		d->used = 0;
-		d->content = NULL;
 		rv = d;
 	}
 	fclose(f);
 	return rv;
 }
 
-mddev_dev_t load_containers(void)
+struct mddev_dev *load_containers(void)
 {
 	struct mdstat_ent *mdstat = mdstat_read(1, 0);
 	struct mdstat_ent *ent;
-	mddev_dev_t d;
-	mddev_dev_t rv = NULL;
+	struct mddev_dev *d;
+	struct mddev_dev *rv = NULL;
 
 	if (!mdstat)
 		return NULL;
@@ -288,7 +211,6 @@ mddev_dev_t load_containers(void)
 			}
 			d->next = rv;
 			d->used = 0;
-			d->content = NULL;
 			rv = d;
 		}
 	free_mdstat(mdstat);
@@ -440,8 +362,8 @@ void devline(char *line)
 	}
 }
 
-mddev_ident_t mddevlist = NULL;
-mddev_ident_t *mddevlp = &mddevlist;
+struct mddev_ident *mddevlist = NULL;
+struct mddev_ident **mddevlp = &mddevlist;
 
 static int is_number(char *w)
 {
@@ -458,8 +380,8 @@ void arrayline(char *line)
 {
 	char *w;
 
-	struct mddev_ident_s mis;
-	mddev_ident_t mi;
+	struct mddev_ident mis;
+	struct mddev_ident *mi;
 
 	mis.uuid_set = 0;
 	mis.super_minor = UnSet;
@@ -667,32 +589,126 @@ void homehostline(char *line)
 	for (w=dl_next(line); w != line ; w=dl_next(w)) {
 		if (strcasecmp(w, "<ignore>")==0)
 			require_homehost = 0;
-		else if (home_host == NULL)
-			home_host = strdup(w);
-		else
+		else if (home_host == NULL) {
+			if (strcasecmp(w, "<none>")==0)
+				home_host = strdup("");
+			else
+				home_host = strdup(w);
+		}else
 			fprintf(stderr, Name ": excess host name on HOMEHOST line: %s - ignored\n",
 				w);
 	}
 }
 
-static char *auto_options = NULL;
+char auto_yes[] = "yes";
+char auto_no[] = "no";
+char auto_homehost[] = "homehost";
+
+static int auto_seen = 0;
 void autoline(char *line)
 {
 	char *w;
+	char *seen;
+	int super_cnt;
+	char *dflt = auto_yes;
+	int homehost = 0;
+	int i;
 
-	if (auto_options) {
+	if (auto_seen) {
 		fprintf(stderr, Name ": AUTO line may only be give once."
 			"  Subsequent lines ignored\n");
 		return;
 	}
+	/* Parse the 'auto' line creating policy statements for the 'auto' policy.
+	 *
+	 * The default is 'yes' but the 'auto' line might over-ride that.
+	 * Words in the line are processed in order with the first
+	 * match winning.
+	 * word can be:
+	 *   +version   - that version can be assembled
+	 *   -version   - that version cannot be auto-assembled
+	 *   yes or +all - any other version can be assembled
+	 *   no or -all  - no other version can be assembled.
+	 *   homehost   - any array associated by 'homehost' to this
+	 *                host can be assembled.
+	 *
+	 * Thus:
+	 *   +ddf -0.90 homehost -all
+	 * will auto-assemble any ddf array, no 0.90 array, and
+	 * any other array (imsm, 1.x) if and only if it is identified
+	 * as belonging to this host.
+	 *
+	 * We translate that to policy by creating 'auto=yes' when we see
+	 * a '+version' line, 'auto=no' if we see '-version' before 'homehost',
+	 * or 'auto=homehost' if we see '-version' after 'homehost'.
+	 * When we see yes, no, +all or -all we stop and any version that hasn't
+	 * been seen gets an appropriate auto= entry.
+	 */
 
-	auto_options = dl_strdup(line);
-	dl_init(auto_options);
+	for (super_cnt = 0; superlist[super_cnt]; super_cnt++)
+		;
+	seen = calloc(super_cnt, 1);
 
-	for (w=dl_next(line); w != line ; w=dl_next(w)) {
-		char *w2 = dl_strdup(w);
-		dl_add(auto_options, w2);
+	for (w = dl_next(line); w != line ; w = dl_next(w)) {
+		char *val;
+
+		if (strcasecmp(w, "yes") == 0) {
+			dflt = auto_yes;
+			break;
+		}
+		if (strcasecmp(w, "no") == 0) {
+			if (homehost)
+				dflt = auto_homehost;
+			else
+				dflt = auto_no;
+			break;
+		}
+		if (strcasecmp(w, "homehost") == 0) {
+			homehost = 1;
+			continue;
+		}
+		if (w[0] == '+')
+			val = auto_yes;
+		else if (w[0] == '-') {
+			if (homehost)
+				val = auto_homehost;
+			else
+				val = auto_no;
+		} else
+			continue;
+
+		if (strcasecmp(w+1, "all") == 0) {
+			dflt = val;
+			break;
+		}
+		for (i = 0; superlist[i]; i++) {
+			const char *version = superlist[i]->name;
+			if (strcasecmp(w+1, version) == 0)
+				break;
+			/* 1 matches 1.x, 0 matches 0.90 */
+			if (version[1] == '.' &&
+			    strlen(w+1) == 1 &&
+			    w[1] == version[0])
+				break;
+			/* 1.anything matches 1.x */
+			if (strcmp(version, "1.x") == 0 &&
+			    strncmp(w+1, "1.", 2) == 0)
+				break;
+		}
+		if (superlist[i] == NULL)
+			/* ignore this word */
+			continue;
+		if (seen[i])
+			/* already know about this metadata */
+			continue;
+		policy_add(rule_policy, pol_auto, val, pol_metadata, superlist[i]->name, NULL);
+		seen[i] = 1;
 	}
+	for (i = 0; i < super_cnt; i++)
+		if (!seen[i])
+			policy_add(rule_policy, pol_auto, dflt, pol_metadata, superlist[i]->name, NULL);
+
+	free(seen);
 }
 
 int loaded = 0;
@@ -767,6 +783,12 @@ void load_conffile(void)
 		case AutoMode:
 			autoline(line);
 			break;
+		case Policy:
+			policyline(line, rule_policy);
+			break;
+		case PartPolicy:
+			policyline(line, rule_part);
+			break;
 		default:
 			fprintf(stderr, Name ": Unknown keyword %s\n", line);
 		}
@@ -810,9 +832,9 @@ struct createinfo *conf_get_create_info(void)
 	return &createinfo;
 }
 
-mddev_ident_t conf_get_ident(char *dev)
+struct mddev_ident *conf_get_ident(char *dev)
 {
-	mddev_ident_t rv;
+	struct mddev_ident *rv;
 	load_conffile();
 	rv = mddevlist;
 	while (dev && rv && (rv->devname == NULL
@@ -821,23 +843,23 @@ mddev_ident_t conf_get_ident(char *dev)
 	return rv;
 }
 
-static void append_dlist(mddev_dev_t *dlp, mddev_dev_t list)
+static void append_dlist(struct mddev_dev **dlp, struct mddev_dev *list)
 {
 	while (*dlp)
 		dlp = &(*dlp)->next;
 	*dlp = list;
 }
 
-mddev_dev_t conf_get_devs()
+struct mddev_dev *conf_get_devs()
 {
 	glob_t globbuf;
 	struct conf_dev *cd;
 	int flags = 0;
-	static mddev_dev_t dlist = NULL;
+	static struct mddev_dev *dlist = NULL;
 	unsigned int i;
 
 	while (dlist) {
-		mddev_dev_t t = dlist;
+		struct mddev_dev *t = dlist;
 		dlist = dlist->next;
 		free(t->devname);
 		free(t);
@@ -863,11 +885,10 @@ mddev_dev_t conf_get_devs()
 	}
 	if (flags & GLOB_APPEND) {
 		for (i=0; i<globbuf.gl_pathc; i++) {
-			mddev_dev_t t = malloc(sizeof(*t));
+			struct mddev_dev *t = malloc(sizeof(*t));
 			t->devname = strdup(globbuf.gl_pathv[i]);
 			t->next = dlist;
 			t->used = 0;
-			t->content = NULL;
 			dlist = t;
 /*	printf("one dev is %s\n", t->devname);*/
 		}
@@ -892,64 +913,30 @@ int conf_test_dev(char *devname)
 	return 0;
 }
 
-int conf_test_metadata(const char *version, int is_homehost)
+int conf_test_metadata(const char *version, struct dev_policy *pol, int is_homehost)
 {
-	/* Check if the given metadata version is allowed
-	 * to be auto-assembled.
-	 * The default is 'yes' but the 'auto' line might over-ride that.
-	 * Words in auto_options are processed in order with the first
-	 * match winning.
-	 * word can be:
-	 *   +version   - that version can be assembled
-	 *   -version   - that version cannot be auto-assembled
-	 *   yes or +all - any other version can be assembled
-	 *   no or -all  - no other version can be assembled.
-	 *   homehost   - any array associated by 'homehost' to this
-	 *                host can be assembled.
-	 *
-	 * Thus:
-	 *   +ddf -0.90 homehost -all
-	 * will auto-assemble any ddf array, no 0.90 array, and
-	 * any other array (imsm, 1.x) if and only if it is identified
-	 * as belonging to this host.
+	/* If anyone said 'yes', that sticks.
+	 * else if homehost applies, use that
+	 * else if there is a 'no', say 'no'.
+	 * else 'yes'.
 	 */
-	char *w;
+	struct dev_policy *p;
+	int no=0, found_homehost=0;
 	load_conffile();
-	if (!auto_options)
-		return 1;
-	for (w = dl_next(auto_options); w != auto_options; w = dl_next(w)) {
-		int rv;
-		if (strcasecmp(w, "yes") == 0)
-			return 1;
-		if (strcasecmp(w, "no") == 0)
-			return 0;
-		if (strcasecmp(w, "homehost") == 0) {
-			if (is_homehost)
-				return 1;
-			else
-				continue;
-		}
-		if (w[0] == '+')
-			rv = 1;
-		else if (w[0] == '-')
-			rv = 0;
-		else continue;
 
-		if (strcasecmp(w+1, "all") == 0)
-			return rv;
-		if (strcasecmp(w+1, version) == 0)
-			return rv;
-		/* allow  '0' to match version '0.90'
-		 * and 1 or 1.whatever to match version '1.x'
-		 */
-		if (version[1] == '.' &&
-		    strlen(w+1) == 1 &&
-		    w[1] == version[0])
-			return rv;
-		if (version[1] == '.' && version[2] == 'x' &&
-		    strncmp(w+1, version, 2) == 0)
-			return rv;
+	pol = pol_find(pol, pol_auto);
+	pol_for_each(p, pol, version) {
+		if (strcmp(p->value, "yes") == 0)
+			return 1;
+		if (strcmp(p->value, "homehost") == 0)
+			found_homehost = 1;
+		if (strcmp(p->value, "no") == 0)
+			no = 1;
 	}
+	if (is_homehost && found_homehost)
+		return 1;
+	if (no)
+		return 0;
 	return 1;
 }
 
@@ -958,7 +945,6 @@ int match_oneof(char *devices, char *devname)
     /* check if one of the comma separated patterns in devices
      * matches devname
      */
-
 
     while (devices && *devices) {
 	char patn[1024];
@@ -1016,7 +1002,7 @@ int conf_name_is_free(char *name)
 	 * It can be taken either by a match on devname, name, or
 	 * even super-minor.
 	 */
-	mddev_ident_t dev;
+	struct mddev_ident *dev;
 
 	load_conffile();
 	for (dev = mddevlist; dev; dev = dev->next) {
@@ -1033,11 +1019,12 @@ int conf_name_is_free(char *name)
 	return 1;
 }
 
-struct mddev_ident_s *conf_match(struct mdinfo *info, struct supertype *st)
+struct mddev_ident *conf_match(struct supertype *st,
+			       struct mdinfo *info,
+			       char *devname,
+			       int verbose, int *rvp)
 {
-	struct mddev_ident_s *array_list, *match;
-	int verbose = 0;
-	char *devname = NULL;
+	struct mddev_ident *array_list, *match;
 	array_list = conf_get_ident(NULL);
 	match = NULL;
 	for (; array_list; array_list = array_list->next) {
@@ -1080,7 +1067,8 @@ struct mddev_ident_s *conf_match(struct mdinfo *info, struct supertype *st)
 		    array_list->super_minor == UnSet) {
 			if (verbose >= 2 && array_list->devname)
 				fprintf(stderr, Name
-			     ": %s doesn't have any identifying information.\n",
+					": %s doesn't have any identifying"
+					" information.\n",
 					array_list->devname);
 			continue;
 		}
@@ -1090,15 +1078,54 @@ struct mddev_ident_s *conf_match(struct mdinfo *info, struct supertype *st)
 			if (verbose >= 0) {
 				if (match->devname && array_list->devname)
 					fprintf(stderr, Name
-		   ": we match both %s and %s - cannot decide which to use.\n",
-						match->devname, array_list->devname);
+						": we match both %s and %s - "
+						"cannot decide which to use.\n",
+						match->devname,
+						array_list->devname);
 				else
 					fprintf(stderr, Name
-						": multiple lines in mdadm.conf match\n");
+						": multiple lines in mdadm.conf"
+						" match\n");
 			}
-			return NULL;
+			if (rvp)
+				*rvp = 2;
+			match = NULL;
+			break;
 		}
 		match = array_list;
 	}
 	return match;
+}
+
+int conf_verify_devnames(struct mddev_ident *array_list)
+{
+	struct mddev_ident *a1, *a2;
+
+	for (a1 = array_list; a1; a1 = a1->next) {
+		if (!a1->devname)
+			continue;
+		for (a2 = a1->next; a2; a2 = a2->next) {
+			if (!a2->devname)
+				continue;
+			if (strcmp(a1->devname, a2->devname) != 0)
+				continue;
+
+			if (a1->uuid_set && a2->uuid_set) {
+				char nbuf[64];
+				__fname_from_uuid(a1->uuid, 0, nbuf, ':');
+				fprintf(stderr,
+					Name ": Devices %s and ",
+					nbuf);
+				__fname_from_uuid(a2->uuid, 0, nbuf, ':');
+				fprintf(stderr,
+					"%s have the same name: %s\n",
+					nbuf, a1->devname);
+			} else
+				fprintf(stderr, Name ": Device %s given twice"
+					" in config file\n", a1->devname);
+			return 1;
+		}
+	}
+
+	return 0;
 }

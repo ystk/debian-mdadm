@@ -28,6 +28,7 @@ struct active_array {
 	struct mdinfo info;
 	struct supertype *container;
 	struct active_array *next, *replaces;
+	int to_remove;
 
 	int action_fd;
 	int resync_start_fd;
@@ -46,6 +47,7 @@ struct active_array {
 	enum sync_action prev_action, curr_action, next_action;
 
 	int check_degraded; /* flag set by mon, read by manage */
+	int check_reshape; /* flag set by mon, read by manage */
 
 	int devnum;
 };

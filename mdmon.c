@@ -189,6 +189,9 @@ static void try_kill_monitor(pid_t pid, char *devname, int sock)
 
 	kill(pid, SIGTERM);
 
+	if (sock < 0)
+		return;
+
 	/* Wait for monitor to exit by reading from the socket, after
 	 * clearing the non-blocking flag */
 	fl = fcntl(sock, F_GETFL, 0);
@@ -262,7 +265,18 @@ static int do_fork(void)
 
 void usage(void)
 {
-	fprintf(stderr, "Usage: mdmon [--all] [--takeover] CONTAINER\n");
+	fprintf(stderr,
+"Usage: mdmon [options] CONTAINER\n"
+"\n"
+"Options are:\n"
+"  --help        -h   : This message\n"
+"  --all              : All devices\n"
+"  --takeover    -t   : Takeover container\n"
+"  --offroot          : Set first character of argv[0] to @ to indicate the\n"
+"                       application was launched from initrd/initramfs and\n"
+"                       should not be shutdown by systemd as part of the\n"
+"                       regular shutdown process.\n"
+);
 	exit(2);
 }
 
@@ -274,24 +288,50 @@ int main(int argc, char *argv[])
 	int devnum;
 	char *devname;
 	int status = 0;
-	int arg;
+	int opt;
 	int all = 0;
 	int takeover = 0;
+	static struct option options[] = {
+		{"all", 0, NULL, 'a'},
+		{"takeover", 0, NULL, 't'},
+		{"help", 0, NULL, 'h'},
+		{"offroot", 0, NULL, OffRootOpt},
+		{NULL, 0, NULL, 0}
+	};
 
-	for (arg = 1; arg < argc; arg++) {
-		if (strncmp(argv[arg], "--all",5) == 0 ||
-		    strcmp(argv[arg], "/proc/mdstat") == 0) {
-			container_name = argv[arg];
+	while ((opt = getopt_long(argc, argv, "th", options, NULL)) != -1) {
+		switch (opt) {
+		case 'a':
+			container_name = argv[optind-1];
 			all = 1;
-		} else if (strcmp(argv[arg], "--takeover") == 0)
+			break;
+		case 't':
+			container_name = optarg;
 			takeover = 1;
-		else if (container_name == NULL)
-			container_name = argv[arg];
-		else
+			break;
+		case OffRootOpt:
+			argv[0][0] = '@';
+			break;
+		case 'h':
+		default:
 			usage();
+			break;
+		}
 	}
+
+	if (all == 0 && container_name == NULL) {
+		if (argv[optind])
+			container_name = argv[optind];
+	}
+
 	if (container_name == NULL)
 		usage();
+
+	if (argc - optind > 1)
+		usage();
+
+	if (strcmp(container_name, "/proc/mdstat") == 0)
+		all = 1;
 
 	if (all) {
 		struct mdstat_ent *mdstat, *e;
@@ -300,7 +340,8 @@ int main(int argc, char *argv[])
 		/* launch an mdmon instance for each container found */
 		mdstat = mdstat_read(0, 0);
 		for (e = mdstat; e; e = e->next) {
-			if (strncmp(e->metadata_version, "external:", 9) == 0 &&
+			if (e->metadata_version &&
+			    strncmp(e->metadata_version, "external:", 9) == 0 &&
 			    !is_subarray(&e->metadata_version[9])) {
 				devname = devnum2devname(e->devnum);
 				/* update cmdline so this mdmon instance can be
@@ -398,7 +439,6 @@ static int mdmon(char *devname, int devnum, int must_fork, int takeover)
 	container->devnum = devnum;
 	container->devname = devname;
 	container->arrays = NULL;
-	container->subarray[0] = 0;
 	container->sock = -1;
 
 	if (!container->devname) {
@@ -468,8 +508,9 @@ static int mdmon(char *devname, int devnum, int must_fork, int takeover)
 			exit(3);
 		}
 		close(victim_sock);
+		victim_sock = -1;
 	}
-	if (container->ss->load_super(container, mdfd, devname)) {
+	if (container->ss->load_container(container, mdfd, devname)) {
 		fprintf(stderr, "mdmon: Cannot load metadata for %s\n",
 			devname);
 		exit(3);
@@ -501,7 +542,8 @@ static int mdmon(char *devname, int devnum, int must_fork, int takeover)
 
 	if (victim > 0) {
 		try_kill_monitor(victim, container->devname, victim_sock);
-		close(victim_sock);
+		if (victim_sock >= 0)
+			close(victim_sock);
 	}
 
 	setsid();
@@ -514,7 +556,45 @@ static int mdmon(char *devname, int devnum, int must_fork, int takeover)
 	ignore = dup(0);
 #endif
 
+	/* This silliness is to stop the compiler complaining
+	 * that we ignore 'ignore'
+	 */
+	if (ignore)
+		ignore++;
+
 	do_manager(container);
 
 	exit(0);
+}
+
+/* Some stub functions so super-* can link with us */
+int child_monitor(int afd, struct mdinfo *sra, struct reshape *reshape,
+		  struct supertype *st, unsigned long blocks,
+		  int *fds, unsigned long long *offsets,
+		  int dests, int *destfd, unsigned long long *destoffsets)
+{
+	return 0;
+}
+
+int restore_stripes(int *dest, unsigned long long *offsets,
+		    int raid_disks, int chunk_size, int level, int layout,
+		    int source, unsigned long long read_offset,
+		    unsigned long long start, unsigned long long length,
+		    char *src_buf)
+{
+	return 1;
+}
+
+void abort_reshape(struct mdinfo *sra)
+{
+	return;
+}
+
+int save_stripes(int *source, unsigned long long *offsets,
+		 int raid_disks, int chunk_size, int level, int layout,
+		 int nwrites, int *dest,
+		 unsigned long long start, unsigned long long length,
+		 char *buf)
+{
+	return 0;
 }

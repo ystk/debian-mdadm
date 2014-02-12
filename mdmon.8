@@ -1,11 +1,11 @@
 .\" See file COPYING in distribution for details.
-.TH MDMON 8 "" v3.1.4
+.TH MDMON 8 "" v3.2.5
 .SH NAME
 mdmon \- monitor MD external metadata arrays
 
 .SH SYNOPSIS
 
-.BI mdmon " [--all] [--takeover] CONTAINER"
+.BI mdmon " [--all] [--takeover] [--offroot] CONTAINER"
 
 .SH OVERVIEW
 The 2.6.27 kernel brings the ability to support external metadata arrays.
@@ -104,7 +104,7 @@ within those disks.  MD metadata in comparison defines a 1:1
 relationship between a set of block devices and a raid array.  For
 example to create 2 arrays at different raid levels on a single
 set of disks, MD metadata requires the disks be partitioned and then
-each array can created be created with a subset of those partitions.  The
+each array can be created with a subset of those partitions.  The
 supported external formats perform this disk carving internally.
 .P
 Container devices simply hold references to all member disks and allow
@@ -165,6 +165,16 @@ argument is over-written with the name of the container.  To allow for
 containers with names longer than 5 characters, this argument can be
 arbitrarily extended, e.g. to
 .BR \-\-all-active-arrays .
+.TP
+.BR \-\-offroot
+Set first character of argv[0] to @ to indicate mdmon was launched
+from initrd/initramfs and should not be shutdown by systemd as part of
+the regular shutdown process. This option is normally only used by
+the system's initscripts. Please see here for more details on how
+systemd handled argv[0]:
+.IP
+.B http://www.freedesktop.org/wiki/Software/systemd/RootStorageDaemons
+.PP
 
 .PP
 Note that
@@ -172,7 +182,7 @@ Note that
 is automatically started by
 .I mdadm
 when needed and so does not need to be considered when working with
-RAID arrays.  The only times it is run other that by
+RAID arrays.  The only times it is run other than by
 .I  mdadm
 is when the boot scripts need to restart it after mounting the new
 root filesystem.
@@ -208,7 +218,7 @@ and
 .B .sock
 file.  The particular filesystem to use is given to mdmon at compile
 time and defaults to
-.BR /dev/.mdadm .
+.BR /run/mdadm .
 
 This filesystem must persist through to shutdown time.
 
