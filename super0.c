@@ -114,7 +114,7 @@ static void examine_super0(struct supertype *st, char *homehost)
 	c=map_num(pers, sb->level);
 	printf("     Raid Level : %s\n", c?c:"-unknown-");
 	if ((int)sb->level > 0) {
-		int ddsks=0;
+		int ddsks = 0, ddsks_denom = 1;
 		printf("  Used Dev Size : %d%s\n", sb->size,
 		       human_size((long long)sb->size<<10));
 		switch(sb->level) {
@@ -122,11 +122,15 @@ static void examine_super0(struct supertype *st, char *homehost)
 		case 4:
 		case 5: ddsks = sb->raid_disks-1; break;
 		case 6: ddsks = sb->raid_disks-2; break;
-		case 10: ddsks = sb->raid_disks / (sb->layout&255) / ((sb->layout>>8)&255);
+		case 10: ddsks = sb->raid_disks;
+			ddsks_denom =  (sb->layout&255) * ((sb->layout>>8)&255);
 		}
-		if (ddsks)
-			printf("     Array Size : %llu%s\n", (unsigned long long)ddsks * sb->size,
-			       human_size(ddsks*(long long)sb->size<<10));
+		if (ddsks) {
+			long long asize = sb->size;
+			asize = (asize << 10) * ddsks / ddsks_denom;
+			printf("     Array Size : %llu%s\n",
+			       asize >> 10,  human_size(asize));
+		}
 	}
 	printf("   Raid Devices : %d\n", sb->raid_disks);
 	printf("  Total Devices : %d\n", sb->nr_disks);
@@ -339,12 +343,14 @@ static void uuid_from_super0(struct supertype *st, int uuid[4])
 	}
 }
 
-static void getinfo_super0(struct supertype *st, struct mdinfo *info)
+static void getinfo_super0(struct supertype *st, struct mdinfo *info, char *map)
 {
 	mdp_super_t *sb = st->sb;
 	int working = 0;
 	int i;
+	int map_disks = info->array.raid_disks;
 
+	memset(info, 0, sizeof(*info));
 	info->array.major_version = sb->major_version;
 	info->array.minor_version = sb->minor_version;
 	info->array.patch_version = sb->patch_version;
@@ -357,6 +363,9 @@ static void getinfo_super0(struct supertype *st, struct mdinfo *info)
 	info->array.chunk_size = sb->chunk_size;
 	info->array.state = sb->state;
 	info->component_size = sb->size*2;
+
+	if (sb->state & (1<<MD_SB_BITMAP_PRESENT))
+		info->bitmap_offset = 8;
 
 	info->disk.state = sb->this_disk.state;
 	info->disk.major = sb->this_disk.major;
@@ -385,27 +394,46 @@ static void getinfo_super0(struct supertype *st, struct mdinfo *info)
 	} else
 		info->reshape_active = 0;
 
+	info->recovery_blocked = info->reshape_active;
+
 	sprintf(info->name, "%d", sb->md_minor);
 	/* work_disks is calculated rather than read directly */
 	for (i=0; i < MD_SB_DISKS; i++)
 		if ((sb->disks[i].state & (1<<MD_DISK_SYNC)) &&
 		    (sb->disks[i].raid_disk < (unsigned)info->array.raid_disks) &&
 		    (sb->disks[i].state & (1<<MD_DISK_ACTIVE)) &&
-		    !(sb->disks[i].state & (1<<MD_DISK_FAULTY)))
+		    !(sb->disks[i].state & (1<<MD_DISK_FAULTY))) {
 			working ++;
+			if (map && i < map_disks)
+				map[i] = 1;
+		} else if (map && i < map_disks)
+			map[i] = 0;
 	info->array.working_disks = working;
 }
 
+static struct mdinfo *container_content0(struct supertype *st, char *subarray)
+{
+	struct mdinfo *info;
+
+	if (subarray)
+		return NULL;
+
+	info = malloc(sizeof(*info));
+	getinfo_super0(st, info, NULL);
+	return info;
+}
 
 static int update_super0(struct supertype *st, struct mdinfo *info,
 			 char *update,
 			 char *devname, int verbose,
 			 int uuid_set, char *homehost)
 {
-	/* NOTE: for 'assemble' and 'force' we need to return non-zero if any change was made.
-	 * For others, the return value is ignored.
+	/* NOTE: for 'assemble' and 'force' we need to return non-zero
+	 * if any change was made.  For others, the return value is
+	 * ignored.
 	 */
 	int rv = 0;
+	int uuid[4];
 	mdp_super_t *sb = st->sb;
 	if (strcmp(update, "sparc2.2")==0 ) {
 		/* 2.2 sparc put the events in the wrong place
@@ -419,14 +447,12 @@ static int update_super0(struct supertype *st, struct mdinfo *info,
 		if (verbose >= 0)
 			fprintf (stderr, Name ": adjusting superblock of %s for 2.2/sparc compatability.\n",
 				 devname);
-	}
-	if (strcmp(update, "super-minor") ==0) {
+	} else if (strcmp(update, "super-minor") ==0) {
 		sb->md_minor = info->array.md_minor;
 		if (verbose > 0)
 			fprintf(stderr, Name ": updating superblock of %s with minor number %d\n",
 				devname, info->array.md_minor);
-	}
-	if (strcmp(update, "summaries") == 0) {
+	} else if (strcmp(update, "summaries") == 0) {
 		unsigned int i;
 		/* set nr_disks, active_disks, working_disks,
 		 * failed_disks, spare_disks based on disks[]
@@ -453,8 +479,7 @@ static int update_super0(struct supertype *st, struct mdinfo *info,
 					sb->spare_disks++;
 			} else if (i >= sb->raid_disks && sb->disks[i].number == 0)
 				sb->disks[i].state = 0;
-	}
-	if (strcmp(update, "force-one")==0) {
+	} else if (strcmp(update, "force-one")==0) {
 		/* Not enough devices for a working array, so
 		 * bring this one up-to-date.
 		 */
@@ -464,8 +489,7 @@ static int update_super0(struct supertype *st, struct mdinfo *info,
 		if (sb->events_hi != ehi ||
 		    sb->events_lo != elo)
 			rv = 1;
-	}
-	if (strcmp(update, "force-array")==0) {
+	} else if (strcmp(update, "force-array")==0) {
 		/* degraded array and 'force' requested, so
 		 * maybe need to mark it 'clean'
 		 */
@@ -475,8 +499,7 @@ static int update_super0(struct supertype *st, struct mdinfo *info,
 			sb->state |= (1 << MD_SB_CLEAN);
 			rv = 1;
 		}
-	}
-	if (strcmp(update, "assemble")==0) {
+	} else if (strcmp(update, "assemble")==0) {
 		int d = info->disk.number;
 		int wonly = sb->disks[d].state & (1<<MD_DISK_WRITEMOSTLY);
 		int mask = (1<<MD_DISK_WRITEMOSTLY);
@@ -491,8 +514,21 @@ static int update_super0(struct supertype *st, struct mdinfo *info,
 			sb->disks[d].state = info->disk.state | wonly;
 			rv = 1;
 		}
-	}
-	if (strcmp(update, "linear-grow-new") == 0) {
+		if (info->reshape_active &&
+		    sb->minor_version > 90 && (sb->reshape_position+1) != 0 &&
+		    info->delta_disks >= 0 &&
+		    info->reshape_progress < sb->reshape_position) {
+			sb->reshape_position = info->reshape_progress;
+			rv = 1;
+		}
+		if (info->reshape_active &&
+		    sb->minor_version > 90 && (sb->reshape_position+1) != 0 &&
+		    info->delta_disks < 0 &&
+		    info->reshape_progress > sb->reshape_position) {
+			sb->reshape_position = info->reshape_progress;
+			rv = 1;
+		}
+	} else if (strcmp(update, "linear-grow-new") == 0) {
 		memset(&sb->disks[info->disk.number], 0, sizeof(sb->disks[0]));
 		sb->disks[info->disk.number].number = info->disk.number;
 		sb->disks[info->disk.number].major = info->disk.major;
@@ -500,8 +536,7 @@ static int update_super0(struct supertype *st, struct mdinfo *info,
 		sb->disks[info->disk.number].raid_disk = info->disk.raid_disk;
 		sb->disks[info->disk.number].state = info->disk.state;
 		sb->this_disk = sb->disks[info->disk.number];
-	}
-	if (strcmp(update, "linear-grow-update") == 0) {
+	} else if (strcmp(update, "linear-grow-update") == 0) {
 		sb->raid_disks = info->array.raid_disks;
 		sb->nr_disks = info->array.nr_disks;
 		sb->active_disks = info->array.active_disks;
@@ -512,20 +547,17 @@ static int update_super0(struct supertype *st, struct mdinfo *info,
 		sb->disks[info->disk.number].minor = info->disk.minor;
 		sb->disks[info->disk.number].raid_disk = info->disk.raid_disk;
 		sb->disks[info->disk.number].state = info->disk.state;
-	}
-	if (strcmp(update, "resync") == 0) {
+	} else if (strcmp(update, "resync") == 0) {
 		/* make sure resync happens */
 		sb->state &= ~(1<<MD_SB_CLEAN);
 		sb->recovery_cp = 0;
-	}
-	if (strcmp(update, "homehost") == 0 &&
-	    homehost) {
+	} else if (strcmp(update, "homehost") == 0 &&
+		   homehost) {
 		uuid_set = 0;
 		update = "uuid";
 		info->uuid[0] = sb->set_uuid0;
 		info->uuid[1] = sb->set_uuid1;
-	}
-	if (strcmp(update, "uuid") == 0) {
+	} else if (strcmp(update, "uuid") == 0) {
 		if (!uuid_set && homehost) {
 			char buf[20];
 			char *hash = sha1_buffer(homehost,
@@ -540,11 +572,19 @@ static int update_super0(struct supertype *st, struct mdinfo *info,
 		if (sb->state & (1<<MD_SB_BITMAP_PRESENT)) {
 			struct bitmap_super_s *bm;
 			bm = (struct bitmap_super_s*)(sb+1);
-			uuid_from_super0(st, (int*)bm->uuid);
+			uuid_from_super0(st, uuid);
+			memcpy(bm->uuid, uuid, 16);
 		}
-	}
-	if (strcmp(update, "_reshape_progress")==0)
+	} else if (strcmp(update, "no-bitmap") == 0) {
+		sb->state &= ~(1<<MD_SB_BITMAP_PRESENT);
+	} else if (strcmp(update, "_reshape_progress")==0)
 		sb->reshape_position = info->reshape_progress;
+	else if (strcmp(update, "writemostly")==0)
+		sb->state |= (1<<MD_DISK_WRITEMOSTLY);
+	else if (strcmp(update, "readwrite")==0)
+		sb->state &= ~(1<<MD_DISK_WRITEMOSTLY);
+	else
+		rv = -1;
 
 	sb->sb_csum = calc_sb0_csum(sb);
 	return rv;
@@ -661,6 +701,8 @@ static int add_to_super0(struct supertype *st, mdu_disk_info_t *dinfo,
 	dk->minor = dinfo->minor;
 	dk->raid_disk = dinfo->raid_disk;
 	dk->state = dinfo->state;
+	/* In case our source disk was writemostly, don't copy that bit */
+	dk->state &= ~(1<<MD_DISK_WRITEMOSTLY);
 
 	sb->this_disk = sb->disks[dinfo->number];
 	sb->sb_csum = calc_sb0_csum(sb);
@@ -742,8 +784,6 @@ static int write_init_super0(struct supertype *st)
 			fprintf(stderr,
 				Name ": failed to write superblock to %s\n",
 				di->devname);
-		close(di->fd);
-		di->fd = -1;
 	}
 	return rv;
 }
@@ -812,9 +852,6 @@ static int load_super0(struct supertype *st, int fd, char *devname)
 	struct bitmap_super_s *bsb;
 
 	free_super0(st);
-
-	if (st->subarray[0])
-		return 1;
 
 	if (!get_dev_size(fd, devname, &dsize))
 		return 1;
@@ -909,10 +946,11 @@ static int load_super0(struct supertype *st, int fd, char *devname)
 
 static struct supertype *match_metadata_desc0(char *arg)
 {
-	struct supertype *st = malloc(sizeof(*st));
-	if (!st) return st;
+	struct supertype *st = calloc(1, sizeof(*st));
+	if (!st)
+		return st;
 
-	memset(st, 0, sizeof(*st));
+	st->container_dev = NoMdDev;
 	st->ss = &super0;
 	st->info = NULL;
 	st->minor_version = 90;
@@ -967,6 +1005,7 @@ static int add_internal_bitmap0(struct supertype *st, int *chunkp,
 	int chunk = *chunkp;
 	mdp_super_t *sb = st->sb;
 	bitmap_super_t *bms = (bitmap_super_t*)(((char*)sb) + MD_SB_BYTES);
+	int uuid[4];
 
 
 	min_chunk = 4096; /* sub-page chunks don't work yet.. */
@@ -990,7 +1029,8 @@ static int add_internal_bitmap0(struct supertype *st, int *chunkp,
 	memset(bms, 0, sizeof(*bms));
 	bms->magic = __cpu_to_le32(BITMAP_MAGIC);
 	bms->version = __cpu_to_le32(major);
-	uuid_from_super0(st, (int*)bms->uuid);
+	uuid_from_super0(st, uuid);
+	memcpy(bms->uuid, uuid, 16);
 	bms->chunksize = __cpu_to_le32(chunk);
 	bms->daemon_sleep = __cpu_to_le32(delay);
 	bms->sync_size = __cpu_to_le64(size);
@@ -1029,12 +1069,10 @@ static int write_bitmap0(struct supertype *st, int fd)
 	int rv = 0;
 
 	int towrite, n;
-	char abuf[4096+4096];
-	char *buf = (char*)(((long)(abuf+4096))&~4095L);
+	void *buf;
 
 	if (!get_dev_size(fd, NULL, &dsize))
 		return 1;
-
 
 	if (dsize < MD_RESERVED_SECTORS*512)
 		return -1;
@@ -1045,6 +1083,9 @@ static int write_bitmap0(struct supertype *st, int fd)
 
 	if (lseek64(fd, offset + 4096, 0)< 0LL)
 		return 3;
+
+	if (posix_memalign(&buf, 4096, 4096))
+		return -ENOMEM;
 
 	memset(buf, 0xff, 4096);
 	memcpy(buf,  ((char*)sb)+MD_SB_BYTES, sizeof(bitmap_super_t));
@@ -1064,6 +1105,7 @@ static int write_bitmap0(struct supertype *st, int fd)
 	if (towrite)
 		rv = -2;
 
+	free(buf);
 	return rv;
 }
 
@@ -1071,18 +1113,32 @@ static void free_super0(struct supertype *st)
 {
 	if (st->sb)
 		free(st->sb);
+	while (st->info) {
+		struct devinfo *di = st->info;
+		st->info = di->next;
+		if (di->fd >= 0)
+			close(di->fd);
+		free(di);
+	}
 	st->sb = NULL;
 }
 
 #ifndef MDASSEMBLE
 static int validate_geometry0(struct supertype *st, int level,
 			      int layout, int raiddisks,
-			      int chunk, unsigned long long size,
+			      int *chunk, unsigned long long size,
 			      char *subdev, unsigned long long *freesize,
 			      int verbose)
 {
 	unsigned long long ldsize;
 	int fd;
+	unsigned int tbmax = 4;
+
+	/* prior to linux 3.1, a but limits usable device size to 2TB.
+	 * It was introduced in 2.6.29, but we won't worry about that detail
+	 */
+	if (get_linux_version() < 3001000)
+		tbmax = 2;
 
 	if (level == LEVEL_CONTAINER) {
 		if (verbose)
@@ -1095,11 +1151,15 @@ static int validate_geometry0(struct supertype *st, int level,
 				MD_SB_DISKS);
 		return 0;
 	}
-	if (size > (0x7fffffffULL<<9)) {
+	if (size >= tbmax * 2ULL*1024*1024*1024) {
 		if (verbose)
-			fprintf(stderr, Name ": 0.90 metadata supports at most 2 terrabytes per device\n");
+			fprintf(stderr, Name ": 0.90 metadata supports at most "
+				"%d terabytes per device\n", tbmax);
 		return 0;
 	}
+	if (chunk && *chunk == UnSet)
+		*chunk = DEFAULT_CHUNK;
+
 	if (!subdev)
 		return 1;
 
@@ -1118,8 +1178,6 @@ static int validate_geometry0(struct supertype *st, int level,
 	close(fd);
 
 	if (ldsize < MD_RESERVED_SECTORS * 512)
-		return 0;
-	if (size > (0x7fffffffULL<<9))
 		return 0;
 	*freesize = MD_NEW_SIZE_SECTORS(ldsize >> 9);
 	return 1;
@@ -1140,6 +1198,7 @@ struct superswitch super0 = {
 	.match_home = match_home0,
 	.uuid_from_super = uuid_from_super0,
 	.getinfo_super = getinfo_super0,
+	.container_content = container_content0,
 	.update_super = update_super0,
 	.init_super = init_super0,
 	.store_super = store_super0,

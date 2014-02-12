@@ -6,9 +6,6 @@
 
 #export DH_VERBOSE=1
 
-TG_BRANCHES="contrib/scripts/mdadd contrib/docs/raid5-vs-raid10 contrib/docs/superblock_formats contrib/docs/md.txt contrib/docs/jd-rebuilding-raid debian/conffile-location debian/disable-incremental fixes/linker-flag-z-now"
--include /usr/share/topgit/tg2quilt.mk
-
 CXFLAGS = -ggdb
 CXFLAGS_UDEB := $(CXFLAGS) -fomit-frame-pointer
 ifneq (,$(findstring noopt,$(DEB_BUILD_OPTIONS)))
@@ -38,7 +35,8 @@ mdadm.udeb: configure
 	dh_testdir
 	$(MAKE) $(FLAGS) all
 	mv mdadm mdadm.udeb
-.PHONY: mdadm.udeb
+	mv mdmon mdmon.udeb
+.PHONY: mdadm.udeb mdmon.udeb
 
 mdadm: FLAGS = CXFLAGS="$(CXFLAGS)" CONFFILE=/etc/mdadm/mdadm.conf CONFFILE2=/etc/mdadm.conf
 mdadm: configure
@@ -50,11 +48,10 @@ INTERPOLATED_FILES = debian/bugscript debian/mkconf
 
 clean:
 	dh_testdir
-	dh_testroot
 	rm -f $(INTERPOLATED_FILES)
 	rm -f build-stamp
 	[ ! -f Makefile ] || $(MAKE) clean
-	rm -f mdadm.udeb mdadm
+	rm -f mdadm.udeb mdmon.udeb mdadm debian/mdadm-startall.8
 	dh_clean
 	debconf-updatepo
 
@@ -84,6 +81,7 @@ install: build $(INTERPOLATED_FILES)
 	install -m0755 debian/mdadm-startall $(DESTDIR)/sbin
 
 	install -m0755 mdadm.udeb $(DESTDIR_UDEB)/sbin/mdadm
+	install -m0755 mdmon.udeb $(DESTDIR_UDEB)/sbin/mdmon
 	install -m0644 udev-md-raid.rules $(DESTDIR_UDEB)/lib/udev/rules.d/64-md-raid.rules
 
 binary-indep: build install
@@ -94,8 +92,9 @@ binary-arch: build install
 	dh_lintian
 	dh_installdebconf
 	dh_installdocs
-	dh_installexamples contrib/mdadd.sh
-	dh_installinit --init-script=mdadm-raid --no-start -- start 25 S . start 60 0 6 .
+	dh_installexamples debian/mdadd.sh
+	dh_installinit --init-script=mdadm-raid --no-restart-on-upgrade -- start 25 S . start 60 0 6 .
+	dh_installinit --init-script=mdadm-waitidle --no-start -- stop 98 0 6 .
 	dh_installinit -- defaults 25
 	dh_installman
 	dh_installcron
@@ -112,4 +111,6 @@ binary-arch: build install
 	dh_builddeb
 
 binary: binary-indep binary-arch
-.PHONY: build clean binary-indep binary-arch binary install configure
+build-indep:
+build-arch: build
+.PHONY: build build-indep build-arch clean binary-indep binary-arch binary install configure

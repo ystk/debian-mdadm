@@ -1,3 +1,199 @@
+mdadm (3.2.5-5) unstable; urgency=low
+
+  * add (empty) restart and force-reload actions to mdadm-waitidle
+    script -- this script is used only when the system needs to be
+    shut down or rebooted, there's nothing to start or restart.
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Thu, 24 Jan 2013 17:04:49 +0400
+
+mdadm (3.2.5-4+mdmon) experimental; urgency=low
+
+  * fix `/etc/init.d/mdadm-raid status' inverse logic (Closes: #686100)
+  * /etc/init.d/mdadm: change RUNDIR to /run instead of /var/run.
+    Mdadm itself uses /run internally, we properly depend on initscripts
+    version which creates /run, and the initscript itself is started
+    after local_fs is processed, so this is merely a no-op, but let's
+    do it for consistency.
+  * Fix 'enough' function for RAID10, to prevent starting of a RAID10
+    array which does not have required minimum of component devices.
+    (Closes: #691668).
+  * fix segfaults in Detail() - mdadm --detail may segfault if a drive
+    has been removed from the array (Closes: #691670)
+  * super0: do not override uuid with homehost.  The bug prevented
+    re-creating an array with v0.90 superblock with the specified uuid
+    when homehost is also specified.  (Closes: #686703)
+  * several fixes for mdmon argument processing (Closes: #691671):
+    - allow --takeover when original was started with --offroot
+    - fix arg parsing.
+    - fix arg processing for -a
+  * Changes based on a patch by Miquel van Smoorenburg (Closes: #684708):
+    - install mdmon in udeb and initramfs, so imsm arrays can work.
+      mdadm runs mdmon automatically when needed (currently for imsm
+      arrays), and mdmon is required to make such arrays read-write
+      (they're read-only by default) so merely presence of mdmon is
+      enough to be able to use imsm arrays.
+    - /etc/init.d/mdadm start: if a mdmon pidfile is found in /run/mdadm,
+      restart mdmon (--takeover --all)
+    - /etc/init.d/mdadm stop: link pidfiles of mdmon processes into
+      /run/sendsigs.omit.d, and make sure that happens before sendsigs runs.
+    - stop mdadm before sendsigs, so that the above code works
+    - add script mdadm-waitidle that runs just before reboot/halt.
+      For each array that is still running, it sets sync_action to idle,
+      and uses mdadm --wait-clean to wait for all arrays to go idle
+      (it has a short timeout).
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 20 Oct 2012 19:20:12 +0400
+
+mdadm (3.2.5-3) unstable; urgency=low
+
+  * revert "Drop unused debconf templates" change -- the templates
+    are actually being (indirectly) used in debian/mdadm.config
+  * fix initramfs-script config name (slipped in the initramfs fixes)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 25 Aug 2012 23:12:50 +0400
+
+mdadm (3.2.5-2) unstable; urgency=low
+
+  [ Sergey B Kirpichev ]
+  * Fix mdadm.lintian-overrides
+  * Fix spelling in binaries, fix lintian warnings
+    manpage-has-errors-from-man and hyphen-used-as-minus-sign
+  * Drop unused debconf templates
+  * Implement status option for mdadm-raid init.d script
+  * Fix lintian info's conflicts-with-version: Conflicts -> Breaks
+
+  [ Michael Tokarev ]
+  * fix spelling mistakes in previous changelog entry
+  * some cleanups for checkarray:
+   - change --help printing and shorten/simplify the text
+   - make --quiet cumulative and stop documenting --real-quiet
+   - do not produce help in case of incorrect usage, and exit with 1
+  * fixes for initramfs integration (Closes: #644389, #678262, #685161):
+   - check INITRDSTART=none early
+   - do not explicitly load raid level modules (modprobe/kmod does this)
+   - do not collect needed raid levels (we include all modules anyway)
+   - load md_mod explicitly since we need to change global parameter
+
+  [ Dmitrijs Ledkovs ]
+  * Use dh_installinit with --no-restart-on-upgrade, which will start
+    arrays, but will not stop them during upgrade. (Closes: 678971)
+  * Copy local administrator's modified udev rules as well as the system
+    one. (Closes: #678973)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 25 Aug 2012 16:25:37 +0400
+
+mdadm (3.2.5-1) unstable; urgency=low
+
+  [ Michael Tokarev ]
+  * new upstream (bugfix) release, fixing regression when --add'ing
+    device to an array, introduced in 3.2.4, plus other minor fixes
+    (Closes: #673104, #673344)
+  * new patch: sha1-includes.diff to fix #include mess in new sha1.h
+  * added a check into debian/checkarray to skip checking arrays created
+    less than 2 weeks ago (Closes: #624273)
+
+  [ Dmitrijs Ledkovs ]
+  * Remove obsolete documentation dating back to ~etch release
+  * Remove reference to obsolete documention from debconf templates
+  * Update debconf templates translations
+  * Remove compatibility with ancient initramfs-tools
+  * Remove debian-specific mdadm-startall.8 in clean target
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Fri, 25 May 2012 20:23:52 +0400
+
+mdadm (3.2.4-1) unstable; urgency=low
+
+  * new upstream (bugfix) release (Closes: #664088, #661552)
+  * removed debian-run-udev.diff (applied upstream), and
+    all RUNDIR handling from debian/rules (it is the default now)
+  * add build-arch and build-indep targets to debian/rules, and
+    bump Standards-Version to 3.9.3
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Thu, 10 May 2012 17:51:41 +0400
+
+mdadm (3.2.3-3) unstable; urgency=low
+
+  * switch from topgit to plain 3.0 (quilt) layout, creating
+    debian/patches.  Don't build-depend on quilt as patching
+    is done automatically by dpkg-source.
+  * debian/patches/debian-run-udev.diff by Roger Leigh (Closes: #644319, #627774)
+  * update debian/mdadm.logcheck.ignore.server to recognize "k" in
+    addition of "blocks" in kernel messages.  Thanks to Frédéric Brière
+    for the patch (Closes: #656038)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Mon, 30 Apr 2012 14:12:38 +0400
+
+mdadm (3.2.3-2) unstable; urgency=low
+
+  [ Michael Tokarev ]
+  * new upstream bugfix/stable version, with lots of fixes all over.
+    Closes: #641886, #628667, #645563, #651880, #607375, #633880
+  * update Neil's email (Closes: #650630)
+  * update mdadd.sh to version 1.52 (Closes: #655212)
+  * fixed a typo (RAID6 vs RAID10) in FAQ (Closes: #637068)
+  * declare ordering dependency for multipath-tools-boot in
+    mdadm-raid init script (Closes: #641584)
+    While at it, remove mention of devfsd
+  * added Slovak (sk.po) po-debconf translation from Slavko <linux@slavino.sk>
+    (Closes: #641972)
+  * set nice value of the check/resync thread too, together with I/O
+    scheduling class, based on patch by Sergey B Kirpichev (Closes: #652547)
+  * small changes for debian/checkarray
+  * (internal) move files from contrib/* topgit branches into debian directory
+  * remove dh_testroot from clean target
+  * add myself to uploaders
+
+  [ Peter Eisentraut ]
+  * Added support for "status" action to mdadm init script (Closes: #651737)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Wed, 18 Jan 2012 22:33:01 +0400
+
+mdadm (3.2.2-1) unstable; urgency=low
+
+  [ martin f. krafft ]
+  * New upstream version (closes: #615494), which addresses:
+    - --grow option aware of size change of underlying device (closes: #618463)
+    - builds with -Werror on gcc-4.6 (closes: #625392).
+    - new features/functionality:
+      + Policy framework.
+      + Improved management of reshaping arrays.
+      + Support for Intel Matrix Storage Manager (IMSM)
+    Thanks to Scott Schaefer for his help in preparing this release!
+  * Do not print io rescheduling info message when run by cron
+    (closes: #598957).
+  * Fix checkarray script so that it does not die after scheduling the first
+    device when there is no scheduling class specified; thanks to Mario
+    'BitKoenig' Holbe (closes: #611627).
+  * Do not include DEVICE line in generated configs but use the built-in value
+    by default (closes: #604702).
+  * Make mdadm-raid init script depend on hostname; thanks to Mario
+   'BitKoenig' Holbe (closes: #610421).
+  * Schedule start/stop of mdadm-raid before/after filesystems are
+    checked&mounted/unmounted; thanks to Mario 'BitKoenig' Holbe
+    (closes: #611632).
+  * Work around a shell coding bug for cases when there are zero active
+    devices (closes: #618561).
+  * Add NEWS entry about metadata change and requirement on new Grub version
+    (closes: #595516).
+  * Update mdadd.sh script from Arno's webpage.
+  * Update md.txt from latest kernel source.
+  * Updated debconf translations:
+    - Catalan by Innocent De Marchi (closes: #628371)
+    - Danish by Joe Dalton (closes: #621346)
+  * Small typo fix in RAID5_versus_RAID10.txt
+  * Bump Standards-Version to 3.9.2; no changes required.
+
+  [ Michael Tokarev ]
+  * don't print W: auto-read-only in checkarray in quiet mode,
+    thanks to Bernd Hanisch for the patch (Closes: #605722)
+  * move initscript metadata from /lib/init/rw/.mdadm to /run/mdadm,
+    and depend on initscripts (>= 2.88dsf-13.3) for /run (Closes: #633054)
+  * move runtime stuff from /dev/.mdadm to /run/mdadm
+  * document defaults change in debian/NEWS (it was forgotten to be
+    done for squeeze) - metadata & chunk size (Closes: #595516)
+
+ -- martin f. krafft <madduck@debian.org>  Mon, 01 Aug 2011 10:41:41 +0200
+
 mdadm (3.1.4-1+8efb9d1) unstable; urgency=low
 
   * Added patch with Makefile fix from upstream (commit 8efb9d1) to fix

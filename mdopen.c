@@ -38,9 +38,9 @@ void make_parts(char *dev, int cnt)
 	 * else that of dev
 	 */
 	struct stat stb;
-	int major_num = major_num; /* quiet gcc -Os unitialized warning */
-	int minor_num = minor_num; /* quiet gcc -Os unitialized warning */
-	int odig = odig; /* quiet gcc -Os unitialized warning */
+	int major_num;
+	int minor_num;
+	int odig;
 	int i;
 	int nlen = strlen(dev) + 20;
 	char *name;
@@ -53,23 +53,26 @@ void make_parts(char *dev, int cnt)
 	if (lstat(dev, &stb)!= 0)
 		return;
 
-	if (S_ISLNK(stb.st_mode)) {
+	if (S_ISBLK(stb.st_mode)) {
+		major_num = major(stb.st_rdev);
+		minor_num = minor(stb.st_rdev);
+		odig = -1;
+	} else if (S_ISLNK(stb.st_mode)) {
 		int len = readlink(dev, orig, sizeof(orig));
 		if (len < 0 || len > 1000)
 			return;
 		orig[len] = 0;
 		odig = isdigit(orig[len-1]);
-	} else if (S_ISBLK(stb.st_mode)) {
-		major_num = major(stb.st_rdev);
-		minor_num = minor(stb.st_rdev);
+		major_num = -1;
+		minor_num = -1;
 	} else
-		   return;
+		return;
 	name = malloc(nlen);
 	for (i=1; i <= cnt ; i++) {
 		struct stat stb2;
 		snprintf(name, nlen, "%s%s%d", dev, dig?"p":"", i);
 		if (stat(name, &stb2)==0) {
-			if (!S_ISBLK(stb2.st_mode))
+			if (!S_ISBLK(stb2.st_mode) || !S_ISBLK(stb.st_mode))
 				continue;
 			if (stb2.st_rdev == makedev(major_num, minor_num+i))
 				continue;
@@ -318,7 +321,7 @@ int create_mddev(char *dev, char *name, int autof, int trustworthy,
 	 * If we cannot detect udev, we need to make
 	 * devices and links ourselves.
 	 */
-	if (stat("/dev/.udev", &stb) != 0 ||
+	if ((stat("/dev/.udev", &stb) != 0 && stat("/run/udev", &stb) != 0) ||
 	    check_env("MDADM_NO_UDEV")) {
 		/* Make sure 'devname' exists and 'chosen' is a symlink to it */
 		if (lstat(devname, &stb) == 0) {
@@ -360,8 +363,12 @@ int create_mddev(char *dev, char *name, int autof, int trustworthy,
 
 			if (lstat(chosen, &stb) == 0) {
 				char buf[300];
+				ssize_t link_len = readlink(chosen, buf, sizeof(buf)-1);
+				if (link_len >= 0)
+					buf[link_len] = '\0';
+
 				if ((stb.st_mode & S_IFMT) != S_IFLNK ||
-				    readlink(chosen, buf, 300) <0 ||
+				    link_len < 0 ||
 				    strcmp(buf, devname) != 0) {
 					fprintf(stderr, Name ": %s exists - ignoring\n",
 						chosen);
@@ -390,6 +397,8 @@ int create_mddev(char *dev, char *name, int autof, int trustworthy,
 int open_mddev(char *dev, int report_errors)
 {
 	int mdfd = open(dev, O_RDWR);
+	if (mdfd < 0 && errno == EACCES)
+		mdfd = open(dev, O_RDONLY);
 	if (mdfd < 0) {
 		if (report_errors)
 			fprintf(stderr, Name ": error opening %s: %s\n",
