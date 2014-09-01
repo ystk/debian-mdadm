@@ -1,3 +1,64 @@
+mdadm (3.3-2) unstable; urgency=low
+
+  * use 63-md-raid-arrays.rules instead of old 64-md-raid.rules
+    (Closes: #726237)
+  * do not use builtin blkid in udev rules, as our udev (at least
+    on wheezy) does not have it (use-external-blkid.diff)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Mon, 14 Oct 2013 15:49:54 +0400
+
+mdadm (3.3-1) unstable; urgency=low
+
+  [ Michael Tokarev ]
+  * new upstream 3.3 release (Closes: #718896)
+    See ANNOUNCE-3.3 for details.
+    Patches:
+    - refreshed debian-conffile-location.diff
+      (added .conf.d)
+    - removed debian-disable-udev-incr-assembly.diff
+      (do not ship udev-md-raid-assembly.rules for now)
+    - refreshed debian-no-Werror.diff
+    - refreshed sha1-includes.diff
+    - removed patches (included upstream)A:
+       spelling-and-manpages.patch
+       fix-enough-function-for-RAID10.patch
+       fix-segfaults-in-detail.patch
+       super0-do-not-override-uuid-with-homehost.patch
+       mdmon-allow-takeover-when-original-was-started-with-.patch
+       mdmon-fix-arg-parsing.patch
+       mdmon-fix-arg-processing-for-a.path
+    Install udev-md-raid-arrays.rules instead of udev-md-raid.rules,
+    don't install new udev-md-raid-assembly.rules for now.
+  * remove Martin F. Krafft from uploaders per his request.
+    Thank you for your contributions!
+  * added remove-bashism-from-makefile.patch patch to work around
+    newly introduced bashism
+  * remove debian/source/options, there's no need to set compression
+    options for debian.tar.gz.
+  * remove outdated debian/docs/md_superblock_formats.txt and
+    debian/docs/md.txt (Closes: #714977, #714978)
+  * ship ANNOUNCE-*, external-reshape-design.txt, mdmon-design.txt
+    files as documentation (Closes: #715324)
+
+  [ Dmitrijs Ledkovs ]
+  * Properly remove 65-mdadm.vol_id.rules, instead of trying to remove a
+    never-existed 65_mdadm.vol_id.rules (note the 65- vs 65_).
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Fri, 11 Oct 2013 10:12:47 +0400
+
+mdadm (3.2.5-6) unstable; urgency=low
+
+  * replace home-grown and not-working-since-etch udevsettle call
+    in initramfs script with proper wait_for_udev function (from
+    common initramfs functions).  This unbreaks situations when
+    the underlying device needs some udev magic to happen before
+    being available, which includes stacked devices (md on lvm)
+    and other cases.  Thanks to Thomas Parmelan and Dave Whitla
+    for finding the root cause of breakage and for providing
+    the fix.  (Closes: #644876)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Tue, 05 Mar 2013 13:32:21 +0400
+
 mdadm (3.2.5-5) unstable; urgency=low
 
   * add (empty) restart and force-reload actions to mdadm-waitidle

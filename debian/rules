@@ -20,7 +20,8 @@ endif
 configure:
 
 debian/mdadm-startall.8: debian/mdadm-startall.sgml
-	docbook-to-man $< > $@
+	docbook-to-man $< > $@.tmp
+	mv $@.tmp $@
 
 build: configure build-stamp
 build-stamp: debian/mdadm-startall.8
@@ -82,7 +83,7 @@ install: build $(INTERPOLATED_FILES)
 
 	install -m0755 mdadm.udeb $(DESTDIR_UDEB)/sbin/mdadm
 	install -m0755 mdmon.udeb $(DESTDIR_UDEB)/sbin/mdmon
-	install -m0644 udev-md-raid.rules $(DESTDIR_UDEB)/lib/udev/rules.d/64-md-raid.rules
+	install -m0644 udev-md-raid-arrays.rules $(DESTDIR_UDEB)/lib/udev/rules.d/63-md-raid-arrays.rules
 
 binary-indep: build install
 
