@@ -147,28 +147,6 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../mdadm.templates:9001
-msgid "Do you want to start MD arrays automatically?"
-msgstr "MD アレイを自動的に起動しますか?"
-
-#. Type: boolean
-#. Description
-#: ../mdadm.templates:9001
-msgid ""
-"Once the base system has booted, mdadm can start all MD arrays (RAIDs) "
-"specified in /etc/mdadm/mdadm.conf which have not yet been started. This is "
-"recommended unless multiple device (MD) support is compiled into the kernel "
-"and all partitions are marked as belonging to MD arrays, with type 0xfd (as "
-"those and only those will be started automatically by the kernel)."
-msgstr ""
-"一旦ベースシステムが起動すると、mdadm は /etc/mdadm/mdadm.conf で指定されたま"
-"だ起動していない全ての MD アレイ (RAID) を起動できます。複数のデバイス (MD) "
-"をサポートするようにカーネルをコンパイルしており、MD アレイのすべてのパーティ"
-"ションをパーティションタイプ 0xfd と設定しない限り、これを推奨します (このよ"
-"うな設定にした場合のみ、アレイは自動的にカーネルから起動されます) 。"
-
-#. Type: boolean
-#. Description
 #: ../mdadm.templates:10001
 msgid "Should mdadm run monthly redundancy checks of the MD arrays?"
 msgstr "mdadm は、毎月 MD アレイの冗長性チェックを行いますか?"
@@ -237,13 +215,6 @@ msgid ""
 msgstr ""
 "MD 関連の重大なイベントが発生した際、メールでの通知を受け取る必要があるユーザ"
 "のメールアドレスを入力してください。"
-
-#~ msgid ""
-#~ "Please refer to /usr/share/doc/mdadm/README.upgrading-2.5.3.gz if you "
-#~ "intend to continue."
-#~ msgstr ""
-#~ "続行したい場合は、/usr/share/doc/mdadm/README.upgrading-2.5.3.gz を参照し"
-#~ "てください。"
 
 #~ msgid ""
 #~ "WARNING! If you are using hard disks which have RAID superblocks from "

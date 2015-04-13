@@ -3,10 +3,9 @@
 # Copyright © 2005-2008 Martin F. Krafft <madduck@debian.org>
 # Distributable under the terms of the GNU GPL version 2.
 #
+set -e
 
 . /usr/share/debconf/confmodule
-# See #369953 for ordering
-set -eu
 
 case "${1:-}" in
   configure|reconfigure)
@@ -18,30 +17,10 @@ case "${1:-}" in
       echo 'W: mdadm: failed to load MD subsystem.' >&2
     fi
 
-    MAKEDEV=/dev/MAKEDEV
-    if [ ! -e /dev/md15 ] \
-      && [ ! -e /dev/.static/dev/md15 ] \
-      && [ ! -e /dev/.devfsd ] \
-      && [ -x $MAKEDEV ]; then
-
-        echo -n 'Generating array device nodes... ' >&2
-        cd /dev
-        if $MAKEDEV md >&2 >/dev/null; then
-          echo 'done.' >&2
-        else
-          echo 'failed.' >&2
-        fi
-    fi
-
     DEBIANCONFIG=/etc/default/mdadm
     CONFIG=/etc/mdadm/mdadm.conf
     ALTCONFIG=/etc/mdadm.conf
     MDADM=/sbin/mdadm
-
-    if [ -z "${2:-}" ] && [ -s /etc/mdctl/mdctl.conf ] \
-        && [ ! -f /etc/mdadm/mdadm.conf ]; then
-      cp -a /etc/mdctl/mdctl.conf /etc/mdadm/mdadm.conf
-    fi
 
     # load current settings, most of which will be overwritten.
     [ -f $DEBIANCONFIG ] && . $DEBIANCONFIG
@@ -59,11 +38,6 @@ case "${1:-}" in
       else
         echo "done (failed to scan arrays; /proc probably not mounted)." >&2
       fi
-    elif dpkg --compare-versions "${2:-2.5.3-1}" le 2.5.3-1; then
-      # we're upgrading from before 2.5.3-1 and there's apparently already
-      # a configuration file which we cannot verify. We'll use the sentinel
-      # during initramfs creation.
-      md5sum $CONFIG > /var/lib/mdadm/CONF-UNCHECKED
     fi
 
     if [ -w $CONFIG ] && [ -z "${MDADM_MAILADDR__:-}" ]; then
@@ -79,8 +53,6 @@ case "${1:-}" in
 
     db_get mdadm/initrdstart
     INITRDSTART="${RET:-all}"
-    db_get mdadm/autostart
-    AUTOSTART="${RET:-true}"
     db_get mdadm/autocheck
     AUTOCHECK="${RET:-true}"
     db_get mdadm/start_daemon
@@ -103,11 +75,6 @@ case "${1:-}" in
 #   'none' to prevent any array from being started from the initial ramdisk.
 INITRDSTART='$INITRDSTART'
 
-# AUTOSTART:
-#   should mdadm start arrays listed in /etc/mdadm/mdadm.conf automatically
-#   during boot?
-AUTOSTART=$AUTOSTART
-
 # AUTOCHECK:
 #   should mdadm run periodic redundancy checks over your arrays? See
 #   /etc/cron.d/mdadm.
@@ -125,59 +92,21 @@ DAEMON_OPTIONS="$DAEMON_OPTIONS"
 #   if this variable is set to true, mdadm will be a little more verbose e.g.
 #   when creating the initramfs.
 VERBOSE=${VERBOSE:-false}
-
-# MAIL_TO:
-#   this variable is now managed in /etc/mdadm/mdadm.conf (MAILADDR).
-#   Please see mdadm.conf(5).
 _eof
 
     db_stop
 
-    # try to undo udev rules (installed by 2.5.2-10, see 2.5.3.git200608202239-1
-    # changelog). Do this before update-initramfs, which copies udev into
-    # initrd.
-    V=2.5.3.git200608202239-1~
-    if [ "${1:-}" = "configure" ] && [ -n "${2:-}" ] \
-        && dpkg --compare-versions $2 ge 2.5.2-10 \
-        && dpkg --compare-versions $2 lt $V; then
+    command -v update-initramfs >/dev/null 2>&1 && update-initramfs -u
 
-      # first, disable the rules
-      rm -f /etc/udev/rules.d/z60_mdadm.rules
-
-      if echo "0843432c9c01ed95c42481eee0cf6fbf  /etc/udev/mdadm.rules" \
-          | md5sum -c >/dev/null; then
-        # no changes by user, so remove
-        rm -f /etc/udev/mdadm.rules
-      else
-        echo "W: mdadm: I tried to remove /etc/udev/mdadm.rules (see changelog)," >&2
-        echo "W: mdadm: but you have modified it, so I won't touch it. Please" >&2
-        echo "W: mdadm: remove the file at your leisure." >&2
+    if dpkg --compare-versions "$2" le 3.3.2-3; then
+      rm -f /var/lib/mdadm/CONF-UNCHECKED /var/lib/mdadm/mdadm.conf-generated
+      if [ -d /var/lib/mdadm ]; then
+        rmdir --ignore-fail-on-non-empty /var/lib/mdadm
       fi
     fi
-
-    command -v update-initramfs >/dev/null 2>&1 && update-initramfs -u
     ;;
 esac
 
-# remove S04 installed as a fix to #294404 as it does not work
-# we only remove the startup links if the previous version was 1.9.0-2.1 (the
-# one with the erroneous fix) and the S04 link exists to make sure that
-# chances are minimised to overwrite admin changes (even though this would
-# not affect woody upgraders)
-if [ "${1:-}" = "configure" ] && [ "${2:-}" = "1.9.0-2.1" ] \
-   && test -L /etc/rcS.d/S04mdadm-raid;
-then
-  update-rc.d -f mdadm-raid remove
-fi
+[ -d /run/systemd/system ] && systemctl --system daemon-reload >/dev/null || :
 
-if [ "${1:-}" = "configure" ] && dpkg --compare-versions ${2:-2.6.7-1} lt 2.6.7-1; then
-  # stop RAIDs a bit later, see #486012
-  for i in 0 6; do
-    test -L /etc/rc${i}.d/S50mdadm-raid && test ! -L /etc/rc${i}.d/S60mdadm-raid \
-      && mv /etc/rc${i}.d/S50mdadm-raid /etc/rc${i}.d/S60mdadm-raid
-  done
-fi
-
-# See #369953
-set +u
 #DEBHELPER#

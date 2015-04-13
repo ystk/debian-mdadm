@@ -3,7 +3,7 @@
 # Copyright © 2006-2008 Martin F. Krafft <madduck@debian.org>
 # Distributable under the terms of the GNU GPL version 2.
 #
-set -eu
+set -e
 
 case "${1:-}" in
   remove)
@@ -15,19 +15,11 @@ case "${1:-}" in
     ;;
 
   purge)
-    GEN_SENTINEL=/var/lib/mdadm/mdadm.conf-generated
-    if [ -r $GEN_SENTINEL ]; then
-      rm -f "$(sed -rne 's,[[:xdigit:]]+  ,,p' $GEN_SENTINEL)"
-    fi
     rm -f /etc/default/mdadm /etc/mdadm.conf /etc/mdadm/mdadm.conf
-    rm -rf /var/lib/mdadm
     ;;
 
-  *) :;;
 esac
 
-# just in case somebody actually purges mdadm, we need this to make debconf
-# (added by dh_installdebconf) behave. See #369953
-set +u
+[ -d /run/systemd/system ] && systemctl --system daemon-reload >/dev/null || :
+
 #DEBHELPER#
-set -u

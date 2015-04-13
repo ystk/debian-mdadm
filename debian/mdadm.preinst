@@ -2,7 +2,7 @@
 # Copyright © martin f. krafft <madduck@debian.org>
 # Distributed under the terms of the Artistic Licence 2.0
 #
-set -eu
+set -e
 
 # based on idea from http://www.dpkg.org/dpkg/ConffileHandling
 rm_conffile() {
@@ -35,14 +35,6 @@ case "$1" in
       mv $OLDCONFIG $DEBIANCONFIG
     fi
 
-    # save the v1 output of -Es just in case we need it for upgrades
-    MDADM=/sbin/mdadm
-    if [ -x "$MDADM" ] && [ -n "${2:-}" ] && \
-        dpkg --compare-versions $2 lt 2; then
-      echo DEVICE partitions > /var/backups/mdadm-Es_v1.dump
-      $MDADM -Esc /var/backups/mdadm-Es_v1.dump >> /var/backups/mdadm-Es_v1.dump || :
-    fi
-
     # Used incorrect name s/_/-/, keep all throughout until after jessie is released.
     rm_conffile /etc/udev/rules.d/65-mdadm.vol_id.rules
     ;;
@@ -50,7 +42,4 @@ case "$1" in
   *) :;;
 esac
 
-# See #369953
-set +u
 #DEBHELPER#
-set -u

@@ -1,3 +1,89 @@
+mdadm (3.3.2-5) unstable; urgency=medium
+
+  * use-tempnode-not-devnode.patch: change udev rules file to use
+    $tempnode which works both on wheezy and jessie udev, instead
+    of $devnode which only works in jessie.  At this stage it is
+    better to make rules file compatible with old version instead
+    of adding versioned dependency.  Should be removed for jessie+1.
+    (Closes: #770883)
+  * fix Closes: list in previous entry (Closes: #771852)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 20 Dec 2014 11:48:44 +0300
+
+mdadm (3.3.2-4) unstable; urgency=medium
+
+  * really remove /var/lib/mdadm in postinst, fixing a brown-paper bag
+    bug in previous upload (I fixed it earlier but forgot to commit it
+    before 3.3.2-3 release).  (Closes: #764036, #771852)
+  * mention closing of #588965 #599352 #694513 by 3.3-1
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Fri, 05 Dec 2014 17:29:22 +0300
+
+mdadm (3.3.2-3) unstable; urgency=medium
+
+  * remove /var/lib/mdadm dir in postinst to clean up from old pkg,
+    remove config files on purge (restore extraneous cleanup from
+    last change)  (Closes: #764036)
+  * remove set -u (error on unset variables) from maintscripts
+    (Closes: #766308)
+  * rebuildmap-strip-local-host-name-from-device-name.patch - a patch
+    from upstream fixing a bug when mdadm have to re-create device
+    nodes after assembling arrays (eg, when switching from initramfs
+    without preserving /dev and /run), to choose the same device names
+    as when doing inital assembly
+  * readlink-path.patch: readlink is in /bin not /usr/bin on debian
+    (Closes: #766416)
+  * mdmonitor-service-simplify.diff: simplify mdmonitor.service
+    systemd file, do not try to read non-existing files (Closes: #764647)
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Fri, 28 Nov 2014 09:55:14 +0300
+
+mdadm (3.3.2-2) unstable; urgency=medium
+
+  * remove more leftovers from old versions
+  * do not embed $VERSION to mkconf and bugscript
+  * removed unneeded lintian-overrides file
+  * removed examples/mdadd.sh
+  * removed references to MAIL_TO from /etc/default/mdadm (pre-2.x mdadm)
+  * removed AUTOSTART variable from /etc/default/mdadm
+    (system will start arrays listed in mdadm.conf)
+  * simplify d/rules, build udeb in a subdir (for now, to be removed)
+  * install systemd services and disable some initscripts (mask them)
+    when systemd is running (Closes: #763959)
+  * build-sys-no-check_rundir.patch: stop (re)linking executables
+    at install time
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Sat, 04 Oct 2014 20:38:36 +0400
+
+mdadm (3.3.2-1) unstable; urgency=low
+
+  * new minor/bugfix upstream release (Closes: #731884, #763080)
+  * removed remove-bashism-from-makefile.patch (applied upstream)
+  * copy 64-md-raid-assembly.rules to initramfs too, this should
+    bring us array auto-assemble during initramfs run (Closes: #678691)
+  * denote inability to initialize md subsystem in local-top script
+    from fatal error to warning (Closes: #733574)
+  * create /etc/modprobe.d/mdadm.conf to set start_ro=1 there
+    instead of doing it in the initramfs
+  * use install -D in d/rules consistently and remove dirs from d/mdadm.dirs
+  * remove references to old (2.x and 1.x) mdadm versions (Closes: #728804)
+  * remove references to very old (pre-wheeze) breaks/replaces/depends
+  * remove support of makedev
+  * reformat mdadm-raid initscript a bit
+  * remove rebuilding-raid.html (had invisible refs) and
+    RAID5_versus_RAID10.txt docs.  Maybe it's a good idea to remove
+    other docs shipped with the package, since these becoming stale
+    and these days, better alternatives exist online
+  * removed debian-specific mdadm-startall script which does nothing more than
+    "mdadm --assemble --scan".  Remove docbook-to-man from build-deps.
+  * pass dpkg-buildflags to upstream build system and
+    stop using our own -O0, -Os etc
+  * remove separate CFLAGS for udeb and simplify *FLAGS handling
+  * bump Standards-Version to 3.9.5 (no changes needed)
+  * fix VCS links to point to anonscm.d.o
+
+ -- Michael Tokarev <mjt@tls.msk.ru>  Wed, 01 Oct 2014 15:09:07 +0400
+
 mdadm (3.3-2) unstable; urgency=low
 
   * use 63-md-raid-arrays.rules instead of old 64-md-raid.rules
@@ -10,7 +96,7 @@ mdadm (3.3-2) unstable; urgency=low
 mdadm (3.3-1) unstable; urgency=low
 
   [ Michael Tokarev ]
-  * new upstream 3.3 release (Closes: #718896)
+  * new upstream 3.3 release (Closes: #718896, #588965, #599352, #694513)
     See ANNOUNCE-3.3 for details.
     Patches:
     - refreshed debian-conffile-location.diff

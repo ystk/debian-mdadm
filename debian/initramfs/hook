@@ -106,34 +106,22 @@ if [ ! -f $CONFIG ]; then
   else
     # we failed to auto-generate, so let the emergency procedure take over
     warn "failed to auto-generate the mdadm.conf file."
-    warn "please read /usr/share/doc/mdadm/README.upgrading-2.5.3.gz ."
   fi
 
 else
 
-  use_temp=0
-  if [ -e /var/lib/mdadm/CONF-UNCHECKED ]; then
-    # the file comes from an old installation and hence is not guaranteed to
-    # work. We thus better create one and start all arrays to be sure.
+  if grep -q '^ARRAY' $CONFIG; then
 
-    warn "unchecked configuration file: $CONFIG"
-    warn "please read /usr/share/doc/mdadm/README.upgrading-2.5.3.gz ."
-
-    use_temp=1
-  elif ! grep -q '^ARRAY' $CONFIG; then
-    # the file defines no ARRAYs. We better create a temporary file to be
-    # sure.
-
-    warn "$CONFIG defines no arrays."
-    use_temp=1
-
-  else
     # this is the ideal case
     install_config $CONFIG $DESTMDADMCONF
     info "using configuration file: $CONFIG"
-  fi
 
-  if [ $use_temp -eq 1 ]; then
+  else
+
+    # the file defines no ARRAYs. We better create a temporary file to be sure.
+
+    warn "$CONFIG defines no arrays."
+
     mkdir --parents ${DESTMDADMCONF%/*}
     tmpfile="${DESTMDADMCONF}.tmp"
     if /usr/share/mdadm/mkconf > $tmpfile; then
@@ -151,6 +139,7 @@ else
       fi
     fi
     rm -f $tmpfile
+
   fi
 
 fi
@@ -255,12 +244,14 @@ if [ "$INITRDSTART" != none ] && [ -n "$devices" ]; then
   fi
 
   # Copy udev rules, which udev no longer does
-  UDEV_RULE=63-md-raid-arrays.rules
-  for rules_folder in /lib/udev/rules.d /etc/udev/rules.d; do
-      if [ -f $rules_folder/$UDEV_RULE ]; then
+  for rules_file in 63-md-raid-arrays.rules 64-md-raid-assembly.rules
+  do
+    for rules_folder in /lib/udev/rules.d /etc/udev/rules.d; do
+      if [ -f $rules_folder/$rules_file ]; then
 	  mkdir -p $DESTDIR$rules_folder
-	  cp $rules_folder/$UDEV_RULE $DESTDIR$rules_folder/$UDEV_RULE
+	  cp $rules_folder/$rules_file $DESTDIR$rules_folder/$rules_file
       fi
+    done
   done
 
 else

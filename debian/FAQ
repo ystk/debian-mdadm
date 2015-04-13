@@ -105,8 +105,6 @@ The latest version of this FAQ is available here:
 
 4. Which RAID level should I use?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  Please read /usr/share/doc/mdadm/RAID5_versus_RAID10.txt.gz .
-
   Many people seem to prefer RAID4/5/6 because it makes more efficient use of
   space. For example, if you have disks of size X, then in order to get 2X
   storage, you need 3 disks for RAID5, but 4 if you use RAID10 or RAID1+0 (or
@@ -531,9 +529,8 @@ The latest version of this FAQ is available here:
 
 23. mdadm's init script fails because it cannot find any arrays. What gives?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  If you don't have any arrays on your system, then mdadm's init script will
-  fail to assemble them and print a warning. If you don't like that, disable
-  AUTOSTART in /etc/default/mdadm.
+  This does not happen anymore, if no arrays present in config file, no arrays
+  will be started.
 
 24. What happened to mdrun? How do I replace it?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -548,8 +545,6 @@ The latest version of this FAQ is available here:
     mdadm --assemble --scan --auto=yes
 
   instead of mdrun.
-
-  Or make use of /usr/share/mdadm/startall .
 
 25. Why are my arrays marked auto-read-only in /proc/mdstat?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
