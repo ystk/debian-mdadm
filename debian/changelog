@@ -1,3 +1,11 @@
+mdadm (3.3.2-5+deb8u1) jessie; urgency=medium
+
+  * Non-maintainer upload.
+  * disable-incremental-assembly.patch: incremental assembly prevents booting
+    in degraded mode (Closes: #784070)
+
+ -- Yann Soubeyrand <yann-externe.soubeyrand@edf.fr>  Mon, 23 Nov 2015 17:22:27 +0100
+
 mdadm (3.3.2-5) unstable; urgency=medium
 
   * use-tempnode-not-devnode.patch: change udev rules file to use
