@@ -18,16 +18,18 @@
  * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+extern const char Name[];
+
 enum array_state { clear, inactive, suspended, readonly, read_auto,
 		   clean, active, write_pending, active_idle, bad_word};
 
 enum sync_action { idle, reshape, resync, recover, check, repair, bad_action };
 
-
 struct active_array {
 	struct mdinfo info;
 	struct supertype *container;
 	struct active_array *next, *replaces;
+	int to_remove;
 
 	int action_fd;
 	int resync_start_fd;
@@ -46,8 +48,7 @@ struct active_array {
 	enum sync_action prev_action, curr_action, next_action;
 
 	int check_degraded; /* flag set by mon, read by manage */
-
-	int devnum;
+	int check_reshape; /* flag set by mon, read by manage */
 };
 
 /*
@@ -70,7 +71,6 @@ extern struct active_array *discard_this;
 extern struct active_array *pending_discard;
 extern struct md_generic_cmd *active_cmd;
 
-
 void remove_pidfile(char *devname);
 void do_monitor(struct supertype *container);
 void do_manager(struct supertype *container);
@@ -90,8 +90,21 @@ extern int monitor_loop_cnt;
  */
 static inline int is_resync_complete(struct mdinfo *array)
 {
-	if (array->resync_start >= array->component_size)
-		return 1;
-	return 0;
+	unsigned long long sync_size = 0;
+	int ncopies, l;
+	switch(array->array.level) {
+	case 1:
+	case 4:
+	case 5:
+	case 6:
+		sync_size = array->component_size;
+		break;
+	case 10:
+		l = array->array.layout;
+		ncopies = (l & 0xff) * ((l >> 8) && 0xff);
+		sync_size = array->component_size * array->array.raid_disks;
+		sync_size /= ncopies;
+		break;
+	}
+	return array->resync_start >= sync_size;
 }
-

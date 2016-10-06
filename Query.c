@@ -35,7 +35,7 @@ int Query(char *dev)
 	int fd = open(dev, O_RDONLY);
 	int vers;
 	int ioctlerr;
-	int superror, superrno;
+	int superror;
 	struct mdinfo info;
 	mdu_array_info_t array;
 	struct supertype *st = NULL;
@@ -47,7 +47,7 @@ int Query(char *dev)
 	char *activity;
 
 	if (fd < 0){
-		fprintf(stderr, Name ": cannot open %s: %s\n",
+		pr_err("cannot open %s: %s\n",
 			dev, strerror(errno));
 		return 1;
 	}
@@ -76,23 +76,26 @@ int Query(char *dev)
 	else {
 		printf("%s: %s %s %d devices, %d spare%s. Use mdadm --detail for more detail.\n",
 		       dev,
-		       human_size_brief(larray_size),
+		       human_size_brief(larray_size,IEC),
 		       map_num(pers, array.level),
 		       array.raid_disks,
 		       array.spare_disks, array.spare_disks==1?"":"s");
 	}
 	st = guess_super(fd);
-	if (st) {
+	if (st && st->ss->compare_super != NULL)
 		superror = st->ss->load_super(st, fd, dev);
-		superrno = errno;
-	} else
+	else
 		superror = -1;
 	close(fd);
 	if (superror == 0) {
 		/* array might be active... */
-		st->ss->getinfo_super(st, &info);
-		if (st->ss == &super0) {
-			mddev = get_md_name(info.array.md_minor);
+		int uuid[4];
+		struct map_ent *me, *map = NULL;
+		st->ss->getinfo_super(st, &info, NULL);
+		st->ss->uuid_from_super(st, uuid);
+		me = map_by_uuid(&map, uuid);
+		if (me) {
+			mddev = me->path;
 			disc.number = info.disk.number;
 			activity = "undetected";
 			if (mddev && (fd = open(mddev, O_RDONLY))>=0) {
@@ -107,7 +110,7 @@ int Query(char *dev)
 				close(fd);
 			}
 		} else {
-			activity = "unknown";
+			activity = "inactive";
 			mddev = "array";
 		}
 		printf("%s: device %d in %d device %s %s %s.  Use mdadm --examine for more detail.\n",
@@ -121,4 +124,3 @@ int Query(char *dev)
 	}
 	return 0;
 }
-

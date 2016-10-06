@@ -19,9 +19,11 @@
 #include <asm/types.h>
 #include <strings.h>
 
-/* The IMSM OROM Version Table definition */
+/* The IMSM Capability (IMSM AHCI and ISCU OROM/EFI variable) Version Table definition */
 struct imsm_orom {
 	__u8 signature[4];
+	#define IMSM_OROM_SIGNATURE "$VER"
+	#define IMSM_NVME_OROM_COMPAT_SIGNATURE "$NVM"
 	__u8 table_ver_major; /* Currently 2 (can change with future revs) */
 	__u8 table_ver_minor; /* Currently 2 (can change with future revs) */
 	__u16 major_ver; /* Example: 8 as in 8.6.0.1020 */
@@ -58,9 +60,16 @@ struct imsm_orom {
 	#define IMSM_OROM_SSS_32MB (1 << 14)
 	#define IMSM_OROM_SSS_64MB (1 << 15)
 	__u16 dpa; /* Disks Per Array supported */
+	#define IMSM_OROM_DISKS_PER_ARRAY 6
+	#define IMSM_OROM_DISKS_PER_ARRAY_NVME 12
 	__u16 tds; /* Total Disks Supported */
+	#define IMSM_OROM_TOTAL_DISKS 6
+	#define IMSM_OROM_TOTAL_DISKS_NVME 12
 	__u8 vpa; /* # Volumes Per Array supported */
+	#define IMSM_OROM_VOLUMES_PER_ARRAY 2
 	__u8 vphba; /* # Volumes Per Host Bus Adapter supported */
+	#define IMSM_OROM_VOLUMES_PER_HBA 4
+	#define IMSM_OROM_VOLUMES_PER_HBA_NVME 4
 	/* Attributes supported. This should map to the
 	 * attributes in the MPB. Also, lower 16 bits
 	 * should match/duplicate RLC bits above.
@@ -72,11 +81,24 @@ struct imsm_orom {
 	#define IMSM_OROM_ATTR_RAID1E IMSM_OROM_RLC_RAID1E
 	#define IMSM_OROM_ATTR_RAID5 IMSM_OROM_RLC_RAID5
 	#define IMSM_OROM_ATTR_RAID_CNG IMSM_OROM_RLC_RAID_CNG
+	#define IMSM_OROM_ATTR_2TB_DISK (1 << 26)
 	#define IMSM_OROM_ATTR_2TB (1 << 29)
 	#define IMSM_OROM_ATTR_PM (1 << 30)
 	#define IMSM_OROM_ATTR_ChecksumVerify (1 << 31)
-	__u32 reserved1;
-	__u32 reserved2;
+	__u32 capabilities;
+	#define IMSM_OROM_CAPABILITIES_Ext_SATA (1 << 0)
+	#define IMSM_OROM_CAPABILITIES_TurboMemory (1 << 1)
+	#define IMSM_OROM_CAPABILITIES_HddPassword (1 << 2)
+	#define IMSM_OROM_CAPABILITIES_DiskCoercion (1 << 3)
+	__u32 driver_features;
+	#define IMSM_OROM_CAPABILITIES_HDDUnlock (1 << 0)
+	#define IMSM_OROM_CAPABILITIES_LEDLoc (1 << 1)
+	#define IMSM_OROM_CAPABILITIES_EnterpriseSystem (1 << 2)
+	#define IMSM_OROM_CAPABILITIES_Zpodd (1 << 3)
+	#define IMSM_OROM_CAPABILITIES_LargeDramCache (1 << 4)
+	#define IMSM_OROM_CAPABILITIES_Rohi (1 << 5)
+	#define IMSM_OROM_CAPABILITIES_ReadPatrol (1 << 6)
+	#define IMSM_OROM_CAPABILITIES_XorHw (1 << 7)
 } __attribute__((packed));
 
 static inline int imsm_orom_has_raid0(const struct imsm_orom *orom)
@@ -108,10 +130,11 @@ static inline int imsm_orom_has_raid5(const struct imsm_orom *orom)
 static inline int imsm_orom_has_chunk(const struct imsm_orom *orom, int chunk)
 {
 	int fs = ffs(chunk);
-
 	if (!fs)
 		return 0;
 	fs--; /* bit num to bit index */
+	if (chunk & (chunk-1))
+		return 0; /* not a power of 2 */
 	return !!(orom->sss & (1 << (fs - 1)));
 }
 
@@ -150,29 +173,75 @@ static inline int fls(int x)
 	return r;
 }
 
-/**
- * imsm_orom_default_chunk - return the largest chunk size supported via orom
- * @orom: orom pointer from find_imsm_orom
- */
-static inline int imsm_orom_default_chunk(const struct imsm_orom *orom)
+static inline int imsm_orom_is_enterprise(const struct imsm_orom *orom)
 {
-	int fs = fls(orom->sss);
-
-	if (!fs)
-		return 0;
-
-	return min(512, (1 << fs));
+	return !!(orom->driver_features & IMSM_OROM_CAPABILITIES_EnterpriseSystem);
 }
 
+static inline int imsm_orom_is_nvme(const struct imsm_orom *orom)
+{
+	return memcmp(orom->signature, IMSM_NVME_OROM_COMPAT_SIGNATURE,
+			sizeof(orom->signature)) == 0;
+}
+
+enum sys_dev_type {
+	SYS_DEV_UNKNOWN = 0,
+	SYS_DEV_SAS,
+	SYS_DEV_SATA,
+	SYS_DEV_NVME,
+	SYS_DEV_VMD,
+	SYS_DEV_MAX
+};
+
 struct sys_dev {
+	enum sys_dev_type type;
 	char *path;
+	char *pci_id;
+	__u16  dev_id;
+	__u32  class;
 	struct sys_dev *next;
 };
 
-struct sys_dev *find_driver_devices(const char *bus, const char *driver);
+struct efi_guid {
+	__u8 b[16];
+};
+
+struct devid_list {
+	__u16 devid;
+	struct devid_list *next;
+};
+
+struct orom_entry {
+	struct imsm_orom orom;
+	struct devid_list *devid_list;
+	enum sys_dev_type type;
+	struct orom_entry *next;
+};
+
+extern struct orom_entry *orom_entries;
+
+static inline char *guid_str(char *buf, struct efi_guid guid)
+{
+	sprintf(buf, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+		 guid.b[3], guid.b[2], guid.b[1], guid.b[0],
+		 guid.b[5], guid.b[4], guid.b[7], guid.b[6],
+		 guid.b[8], guid.b[9], guid.b[10], guid.b[11],
+		 guid.b[12], guid.b[13], guid.b[14], guid.b[15]);
+	return buf;
+}
+
+char *diskfd_to_devpath(int fd);
 __u16 devpath_to_vendor(const char *dev_path);
-void free_sys_dev(struct sys_dev **list);
+struct sys_dev *find_driver_devices(const char *bus, const char *driver);
+struct sys_dev *find_intel_devices(void);
+const struct imsm_orom *find_imsm_capability(struct sys_dev *hba);
 const struct imsm_orom *find_imsm_orom(void);
 int disk_attached_to_hba(int fd, const char *hba_path);
+int devt_attached_to_hba(dev_t dev, const char *hba_path);
 char *devt_to_devpath(dev_t dev);
 int path_attached_to_hba(const char *disk_path, const char *hba_path);
+const char *get_sys_dev_type(enum sys_dev_type);
+const struct orom_entry *get_orom_entry_by_device_id(__u16 dev_id);
+const struct imsm_orom *get_orom_by_device_id(__u16 device_id);
+struct sys_dev *device_by_id(__u16 device_id);
+char *vmd_domain_to_controller(struct sys_dev *hba, char *buf);

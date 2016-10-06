@@ -25,9 +25,9 @@
 #define	_GNU_SOURCE
 #define _FILE_OFFSET_BITS 64
 #include	<unistd.h>
-#if !defined(__dietlibc__) && !defined(__KLIBC__)
+#ifdef __GLIBC__
 extern __off64_t lseek64 __P ((int __fd, __off64_t __offset, int __whence));
-#else
+#elif !defined(lseek64)
 # if defined(__NO_STAT64) || __WORDSIZE != 32
 # define lseek64 lseek
 # endif
@@ -35,6 +35,7 @@ extern __off64_t lseek64 __P ((int __fd, __off64_t __offset, int __whence));
 
 #include	<sys/types.h>
 #include	<sys/stat.h>
+#include	<stdint.h>
 #include	<stdlib.h>
 #include	<time.h>
 #include	<sys/time.h>
@@ -51,6 +52,31 @@ extern __off64_t lseek64 __P ((int __fd, __off64_t __offset, int __whence));
 #define srandom srand
 #endif
 
+#ifdef NO_COROSYNC
+#define CS_OK 1
+typedef uint64_t cmap_handle_t;
+#else
+#include	<corosync/cmap.h>
+#endif
+
+#ifndef NO_DLM
+#include	<libdlm.h>
+#include	<errno.h>
+#else
+#define LKF_NOQUEUE	0x00000001
+#define LKF_CONVERT	0x00000004
+#define LKM_PWMODE	4
+#define EUNLOCK		0x10002
+
+typedef void *dlm_lshandle_t;
+
+struct dlm_lksb {
+	int sb_status;
+	uint32_t sb_lkid;
+	char sb_flags;
+	char *sb_lvbptr;
+};
+#endif
 
 #include	<linux/kdev_t.h>
 /*#include	<linux/fs.h> */
@@ -64,16 +90,17 @@ extern __off64_t lseek64 __P ((int __fd, __off64_t __offset, int __whence));
 #define BLKGETSIZE64 _IOR(0x12,114,size_t) /* return device size in bytes (u64 *arg) */
 #endif
 
+#define DEFAULT_CHUNK 512
 #define DEFAULT_BITMAP_CHUNK 4096
 #define DEFAULT_BITMAP_DELAY 5
 #define DEFAULT_MAX_WRITE_BEHIND 256
 
 /* MAP_DIR should be somewhere that persists across the pivotroot
  * from early boot to late boot.
- * Currently /dev seems to be the only option on most distros.
+ * /run  seems to have emerged as the best standard.
  */
 #ifndef MAP_DIR
-#define MAP_DIR "/dev/.mdadm"
+#define MAP_DIR "/run/mdadm"
 #endif /* MAP_DIR */
 /* MAP_FILE is what we name the map file we put in MAP_DIR, in case you
  * want something other than the default of "map"
@@ -82,7 +109,7 @@ extern __off64_t lseek64 __P ((int __fd, __off64_t __offset, int __whence));
 #define MAP_FILE "map"
 #endif /* MAP_FILE */
 /* MDMON_DIR is where pid and socket files used for communicating
- * with mdmon normally live.  It *should* be /var/run, but when
+ * with mdmon normally live.  Best is /var/run/mdadm as
  * mdmon is needed at early boot then it needs to write there prior
  * to /var/run being mounted read/write, and it also then needs to
  * persist beyond when /var/run is mounter read-only.  So, to be
@@ -90,8 +117,16 @@ extern __off64_t lseek64 __P ((int __fd, __off64_t __offset, int __whence));
  * boot process and stays up as long as possible during shutdown.
  */
 #ifndef MDMON_DIR
-#define MDMON_DIR "/dev/.mdadm/"
+#define MDMON_DIR "/run/mdadm"
 #endif /* MDMON_DIR */
+
+/* FAILED_SLOTS is where to save files storing recent removal of array
+ * member in order to allow future reuse of disk inserted in the same
+ * slot for array recovery
+ */
+#ifndef FAILED_SLOTS_DIR
+#define FAILED_SLOTS_DIR "/run/mdadm/failed-slots"
+#endif /* FAILED_SLOTS */
 
 #include	"md_u.h"
 #include	"md_p.h"
@@ -121,12 +156,12 @@ extern __off64_t lseek64 __P ((int __fd, __off64_t __offset, int __whence));
 
 #if !defined(__KLIBC__)
 #if BYTE_ORDER == LITTLE_ENDIAN
-#define	__cpu_to_le16(_x) (_x)
-#define __cpu_to_le32(_x) (_x)
-#define __cpu_to_le64(_x) (_x)
-#define	__le16_to_cpu(_x) (_x)
-#define __le32_to_cpu(_x) (_x)
-#define __le64_to_cpu(_x) (_x)
+#define	__cpu_to_le16(_x) (unsigned int)(_x)
+#define __cpu_to_le32(_x) (unsigned int)(_x)
+#define __cpu_to_le64(_x) (unsigned long long)(_x)
+#define	__le16_to_cpu(_x) (unsigned int)(_x)
+#define __le32_to_cpu(_x) (unsigned int)(_x)
+#define __le64_to_cpu(_x) (unsigned long long)(_x)
 
 #define	__cpu_to_be16(_x) bswap_16(_x)
 #define __cpu_to_be32(_x) bswap_32(_x)
@@ -142,17 +177,41 @@ extern __off64_t lseek64 __P ((int __fd, __off64_t __offset, int __whence));
 #define __le32_to_cpu(_x) bswap_32(_x)
 #define __le64_to_cpu(_x) bswap_64(_x)
 
-#define	__cpu_to_be16(_x) (_x)
-#define __cpu_to_be32(_x) (_x)
-#define __cpu_to_be64(_x) (_x)
-#define	__be16_to_cpu(_x) (_x)
-#define __be32_to_cpu(_x) (_x)
-#define __be64_to_cpu(_x) (_x)
+#define	__cpu_to_be16(_x) (unsigned int)(_x)
+#define __cpu_to_be32(_x) (unsigned int)(_x)
+#define __cpu_to_be64(_x) (unsigned long long)(_x)
+#define	__be16_to_cpu(_x) (unsigned int)(_x)
+#define __be32_to_cpu(_x) (unsigned int)(_x)
+#define __be64_to_cpu(_x) (unsigned long long)(_x)
 #else
 #  error "unknown endianness."
 #endif
 #endif /* __KLIBC__ */
 
+/*
+  * Check at compile time that something is of a particular type.
+  * Always evaluates to 1 so you may use it easily in comparisons.
+*/
+
+#define typecheck(type,x) \
+({	   type __dummy; \
+	   typeof(x) __dummy2; \
+	   (void)(&__dummy == &__dummy2); \
+	   1; \
+})
+
+/*
+ *  These inlines deal with timer wrapping correctly.
+ *
+ * time_after(a,b) returns true if the time a is after time b.
+*/
+
+#define time_after(a,b)	\
+        (typecheck(unsigned int, a) && \
+         typecheck(unsigned int, b) && \
+         ((int)((b) - (a)) < 0))
+
+#define time_before(a,b)        time_after(b,a)
 
 /*
  * min()/max()/clamp() macros that also do
@@ -171,6 +230,10 @@ extern __off64_t lseek64 __P ((int __fd, __off64_t __offset, int __whence));
 	(void) (&_max1 == &_max2);              \
 	_max1 > _max2 ? _max1 : _max2; })
 
+#define ARRAY_SIZE(x) (sizeof(x)/sizeof(x[0]))
+
+extern const char Name[];
+
 /* general information that might be extracted from a superblock */
 struct mdinfo {
 	mdu_array_info_t	array;
@@ -179,30 +242,47 @@ struct mdinfo {
 	int			uuid[4];
 	char			name[33];
 	unsigned long long	data_offset;
+	unsigned long long	new_data_offset;
 	unsigned long long	component_size; /* same as array.size, except in
 						 * sectors and up to 64bits.
 						 */
 	unsigned long long	custom_array_size; /* size for non-default sized
 						    * arrays (in sectors)
 						    */
+#define NO_RESHAPE		0
+#define VOLUME_RESHAPE		1
+#define CONTAINER_RESHAPE	2
+#define RESHAPE_NO_BACKUP	16 /* Mask 'or'ed in */
 	int			reshape_active;
 	unsigned long long	reshape_progress;
+	int			recovery_blocked; /* for external metadata it
+						   * indicates that there is
+						   * reshape in progress in
+						   * container,
+						   * for native metadata it is
+						   * reshape_active field mirror
+						   */
+	int journal_device_required;
+	int journal_clean;
+
+	/* During reshape we can sometimes change the data_offset to avoid
+	 * over-writing still-valid data.  We need to know if there is space.
+	 * So getinfo_super will fill in space_before and space_after in sectors.
+	 * data_offset can be increased or decreased by this amount.
+	 */
+	unsigned long long	space_before, space_after;
 	union {
 		unsigned long long resync_start; /* per-array resync position */
 		unsigned long long recovery_start; /* per-device rebuild position */
 		#define MaxSector  (~0ULL) /* resync/recovery complete position */
 	};
+	long			bitmap_offset;	/* 0 == none, 1 == a file */
 	unsigned long		safe_mode_delay; /* ms delay to mark clean */
 	int			new_level, delta_disks, new_layout, new_chunk;
 	int			errors;
 	unsigned long		cache_size; /* size of raid456 stripe cache*/
 	int			mismatch_cnt;
 	char			text_version[50];
-	void 			*update_private; /* for passing metadata-format
-						  * specific update data
-						  * between successive calls to
-						  * update_super()
-						  */
 
 	int container_member; /* for assembling external-metatdata arrays
 			       * This is to be used internally by metadata
@@ -210,7 +290,7 @@ struct mdinfo {
 	int container_enough; /* flag external handlers can set to
 			       * indicate that subarrays have not enough (-1),
 			       * enough to start (0), or all expected disks (1) */
-	char 		sys_name[20];
+	char		sys_name[20];
 	struct mdinfo *devs;
 	struct mdinfo *next;
 
@@ -226,6 +306,8 @@ struct mdinfo {
 	#define	DS_UNBLOCK	2048
 	int prev_state, curr_state, next_state;
 
+	/* info read from sysfs */
+	char		sysfs_array_state[20];
 };
 
 struct createinfo {
@@ -234,10 +316,10 @@ struct createinfo {
 	int	autof;
 	int	mode;
 	int	symlinks;
+	int	names;
+	int	bblist;
 	struct supertype *supertype;
 };
-
-#define Name "mdadm"
 
 enum mode {
 	ASSEMBLE=1,
@@ -249,6 +331,7 @@ enum mode {
 	GROW,
 	INCREMENTAL,
 	AUTODETECT,
+	mode_count
 };
 
 extern char short_options[];
@@ -256,22 +339,22 @@ extern char short_bitmap_options[];
 extern char short_bitmap_auto_options[];
 extern struct option long_options[];
 extern char Version[], Usage[], Help[], OptionHelp[],
+	*mode_help[],
 	Help_create[], Help_build[], Help_assemble[], Help_grow[],
 	Help_incr[],
 	Help_manage[], Help_misc[], Help_monitor[], Help_config[];
 
 /* for option that don't have short equivilents, we assign arbitrary
- * small numbers.  '1' means an undecorated option, so we start at '2'.
- * (note we must stop before we get to 65 i.e. 'A')
+ * numbers later than any 'short' character option.
  */
 enum special_options {
-	AssumeClean = 2,
+	AssumeClean = 300,
 	BitmapChunk,
 	WriteBehind,
 	ReAdd,
 	NoDegraded,
 	Sparc22,
-	BackupFile, /* 8 */
+	BackupFile,
 	HomeHost,
 	AutoHomeHost,
 	Symlinks,
@@ -279,7 +362,61 @@ enum special_options {
 	Waitclean,
 	DetailPlatform,
 	KillSubarray,
-	UpdateSubarray, /* 16 */
+	UpdateSubarray,
+	IncrementalPath,
+	NoSharing,
+	HelpOptions,
+	Brief,
+	ManageOpt,
+	Add,
+	AddSpare,
+	AddJournal,
+	Remove,
+	Fail,
+	Replace,
+	With,
+	MiscOpt,
+	WaitOpt,
+	ConfigFile,
+	ChunkSize,
+	WriteMostly,
+	Layout,
+	Auto,
+	Force,
+	SuperMinor,
+	EMail,
+	ProgramOpt,
+	Increment,
+	Fork,
+	Bitmap,
+	RebuildMapOpt,
+	InvalidBackup,
+	UdevRules,
+	FreezeReshape,
+	Continue,
+	OffRootOpt,
+	Prefer,
+	KillOpt,
+	DataOffset,
+	ExamineBB,
+	Dump,
+	Restore,
+	Action,
+	Nodes,
+	ClusterName,
+	ClusterConfirm,
+	WriteJournal,
+};
+
+enum prefix_standard {
+	JEDEC,
+	IEC
+};
+
+enum bitmap_update {
+    NoUpdate,
+    NameUpdate,
+    NodeNumUpdate,
 };
 
 /* structures read from config file */
@@ -293,7 +430,7 @@ enum special_options {
  * devices is considered
  */
 #define UnSet (0xfffe)
-typedef struct mddev_ident_s {
+struct mddev_ident {
 	char	*devname;
 
 	int	uuid_set;
@@ -321,81 +458,120 @@ typedef struct mddev_ident_s {
 				 */
 	char	*member;	/* subarray within a container */
 
-	struct mddev_ident_s *next;
+	struct mddev_ident *next;
 	union {
 		/* fields needed by different users of this structure */
 		int assembled;	/* set when assembly succeeds */
 	};
-} *mddev_ident_t;
+};
+
+struct context {
+	int	readonly;
+	int	runstop;
+	int	verbose;
+	int	brief;
+	int	force;
+	char	*homehost;
+	int	require_homehost;
+	char	*prefer;
+	int	export;
+	int	test;
+	char	*subarray;
+	char	*update;
+	int	scan;
+	int	SparcAdjust;
+	int	autof;
+	int	delay;
+	int	freeze_reshape;
+	char	*backup_file;
+	int	invalid_backup;
+	char	*action;
+	int	nodes;
+	char	*homecluster;
+};
+
+struct shape {
+	int	raiddisks;
+	int	sparedisks;
+	int	journaldisks;
+	int	level;
+	int	layout;
+	char	*layout_str;
+	int	chunk;
+	int	bitmap_chunk;
+	char	*bitmap_file;
+	int	assume_clean;
+	int	write_behind;
+	unsigned long long size;
+};
 
 /* List of device names - wildcards expanded */
-typedef struct mddev_dev_s {
+struct mddev_dev {
 	char *devname;
-	char disposition;	/* 'a' for add, 'r' for remove, 'f' for fail.
+	int disposition;	/* 'a' for add, 'r' for remove, 'f' for fail,
+				 * 'A' for re_add.
 				 * Not set for names read from .config
 				 */
 	char writemostly;	/* 1 for 'set writemostly', 2 for 'clear writemostly' */
-	char re_add;
-	char used;		/* set when used */
-	struct mdinfo *content;	/* If devname is a container, this might list
-				 * the remaining member arrays. */
-	struct mddev_dev_s *next;
-} *mddev_dev_t;
+	int used;		/* set when used */
+	long long data_offset;
+	struct mddev_dev *next;
+};
 
 typedef struct mapping {
 	char *name;
 	int num;
 } mapping_t;
 
-
 struct mdstat_ent {
-	char		*dev;
-	int		devnum;
+	char		devnm[32];
 	int		active;
 	char		*level;
 	char		*pattern; /* U or up, _ for down */
 	int		percent; /* -1 if no resync */
-	int		resync; /* 1 if resync, 0 if recovery */
+	int		resync; /* 3 if check, 2 if reshape, 1 if resync, 0 if recovery */
 	int		devcnt;
 	int		raid_disks;
-	int		chunk_size;
 	char *		metadata_version;
 	struct dev_member {
 		char			*name;
 		struct dev_member	*next;
-	} 		*members;
+	}		*members;
 	struct mdstat_ent *next;
 };
 
 extern struct mdstat_ent *mdstat_read(int hold, int start);
+extern void mdstat_close(void);
 extern void free_mdstat(struct mdstat_ent *ms);
 extern void mdstat_wait(int seconds);
 extern void mdstat_wait_fd(int fd, const sigset_t *sigmask);
-extern int mddev_busy(int devnum);
+extern int mddev_busy(char *devnm);
 extern struct mdstat_ent *mdstat_by_component(char *name);
+extern struct mdstat_ent *mdstat_by_subdev(char *subdev, char *container);
 
 struct map_ent {
 	struct map_ent *next;
-	int	devnum;
+	char	devnm[32];
 	char	metadata[20];
 	int	uuid[4];
 	int	bad;
 	char	*path;
 };
-extern int map_update(struct map_ent **mpp, int devnum, char *metadata,
+extern int map_update(struct map_ent **mpp, char *devnm, char *metadata,
 		      int uuid[4], char *path);
-extern void map_remove(struct map_ent **map, int devnum);
+extern void map_remove(struct map_ent **map, char *devnm);
 extern struct map_ent *map_by_uuid(struct map_ent **map, int uuid[4]);
-extern struct map_ent *map_by_devnum(struct map_ent **map, int devnum);
+extern struct map_ent *map_by_devnm(struct map_ent **map, char *devnm);
+extern void map_free(struct map_ent *map);
 extern struct map_ent *map_by_name(struct map_ent **map, char *name);
 extern void map_read(struct map_ent **melp);
 extern int map_write(struct map_ent *mel);
-extern void map_delete(struct map_ent **mapp, int devnum);
-extern void map_free(struct map_ent *map);
+extern void map_delete(struct map_ent **mapp, char *devnm);
 extern void map_add(struct map_ent **melp,
-		    int devnum, char *metadata, int uuid[4], char *path);
+		    char *devnm, char *metadata, int uuid[4], char *path);
 extern int map_lock(struct map_ent **melp);
 extern void map_unlock(struct map_ent **melp);
+extern void map_fork(void);
 
 /* various details can be requested */
 enum sysfs_read_flags {
@@ -409,42 +585,77 @@ enum sysfs_read_flags {
 	GET_DISKS	= (1 << 7),
 	GET_DEGRADED	= (1 << 8),
 	GET_SAFEMODE	= (1 << 9),
-	GET_DEVS	= (1 << 10), /* gets role, major, minor */
-	GET_OFFSET	= (1 << 11),
-	GET_SIZE	= (1 << 12),
-	GET_STATE	= (1 << 13),
-	GET_ERROR	= (1 << 14),
+	GET_BITMAP_LOCATION = (1 << 10),
+
+	GET_DEVS	= (1 << 20), /* gets role, major, minor */
+	GET_OFFSET	= (1 << 21),
+	GET_SIZE	= (1 << 22),
+	GET_STATE	= (1 << 23),
+	GET_ERROR	= (1 << 24),
+	GET_ARRAY_STATE = (1 << 25),
 };
 
 /* If fd >= 0, get the array it is open on,
- * else use devnum. >=0 -> major9. <0.....
+ * else use devnm.
  */
-extern int sysfs_open(int devnum, char *devname, char *attr);
-extern void sysfs_init(struct mdinfo *mdi, int fd, int devnum);
+extern int sysfs_open(char *devnm, char *devname, char *attr);
+extern void sysfs_init(struct mdinfo *mdi, int fd, char *devnm);
+extern void sysfs_init_dev(struct mdinfo *mdi, unsigned long devid);
 extern void sysfs_free(struct mdinfo *sra);
-extern struct mdinfo *sysfs_read(int fd, int devnum, unsigned long options);
+extern struct mdinfo *sysfs_read(int fd, char *devnm, unsigned long options);
 extern int sysfs_attr_match(const char *attr, const char *str);
 extern int sysfs_match_word(const char *word, char **list);
 extern int sysfs_set_str(struct mdinfo *sra, struct mdinfo *dev,
 			 char *name, char *val);
 extern int sysfs_set_num(struct mdinfo *sra, struct mdinfo *dev,
 			 char *name, unsigned long long val);
+extern int sysfs_set_num_signed(struct mdinfo *sra, struct mdinfo *dev,
+				char *name, long long val);
 extern int sysfs_uevent(struct mdinfo *sra, char *event);
 extern int sysfs_get_fd(struct mdinfo *sra, struct mdinfo *dev,
 			char *name);
 extern int sysfs_fd_get_ll(int fd, unsigned long long *val);
 extern int sysfs_get_ll(struct mdinfo *sra, struct mdinfo *dev,
 			char *name, unsigned long long *val);
+extern int sysfs_fd_get_two(int fd, unsigned long long *v1, unsigned long long *v2);
+extern int sysfs_get_two(struct mdinfo *sra, struct mdinfo *dev,
+			 char *name, unsigned long long *v1, unsigned long long *v2);
 extern int sysfs_fd_get_str(int fd, char *val, int size);
+extern int sysfs_attribute_available(struct mdinfo *sra, struct mdinfo *dev,
+				     char *name);
 extern int sysfs_get_str(struct mdinfo *sra, struct mdinfo *dev,
 			 char *name, char *val, int size);
 extern int sysfs_set_safemode(struct mdinfo *sra, unsigned long ms);
 extern int sysfs_set_array(struct mdinfo *info, int vers);
 extern int sysfs_add_disk(struct mdinfo *sra, struct mdinfo *sd, int resume);
 extern int sysfs_disk_to_scsi_id(int fd, __u32 *id);
-extern int sysfs_unique_holder(int devnum, long rdev);
+extern int sysfs_unique_holder(char *devnm, long rdev);
+extern int sysfs_freeze_array(struct mdinfo *sra);
+extern int sysfs_wait(int fd, int *msec);
 extern int load_sys(char *path, char *buf);
-
+extern int reshape_prepare_fdlist(char *devname,
+				  struct mdinfo *sra,
+				  int raid_disks,
+				  int nrdisks,
+				  unsigned long blocks,
+				  char *backup_file,
+				  int *fdlist,
+				  unsigned long long *offsets);
+extern void reshape_free_fdlist(int *fdlist,
+				unsigned long long *offsets,
+				int size);
+extern int reshape_open_backup_file(char *backup,
+				    int fd,
+				    char *devname,
+				    long blocks,
+				    int *fdlist,
+				    unsigned long long *offsets,
+				    char *sysfs_name,
+				    int restart);
+extern unsigned long compute_backup_blocks(int nchunk, int ochunk,
+					   unsigned int ndata, unsigned int odata);
+extern char *locate_backup(char *name);
+extern char *make_backup(char *name);
 
 extern int save_stripes(int *source, unsigned long long *offsets,
 			int raid_disks, int chunk_size, int level, int layout,
@@ -454,7 +665,8 @@ extern int save_stripes(int *source, unsigned long long *offsets,
 extern int restore_stripes(int *dest, unsigned long long *offsets,
 			   int raid_disks, int chunk_size, int level, int layout,
 			   int source, unsigned long long read_offset,
-			   unsigned long long start, unsigned long long length);
+			   unsigned long long start, unsigned long long length,
+			   char *src_buf);
 
 #ifndef Sendmail
 #define Sendmail "/usr/lib/sendmail -t"
@@ -466,14 +678,48 @@ extern char *map_num(mapping_t *map, int num);
 extern int map_name(mapping_t *map, char *name);
 extern mapping_t r5layout[], r6layout[], pers[], modes[], faultylayout[];
 
-extern char *map_dev(int major, int minor, int create);
+extern char *map_dev_preferred(int major, int minor, int create,
+			       char *prefer);
+static inline char *map_dev(int major, int minor, int create)
+{
+	return map_dev_preferred(major, minor, create, NULL);
+}
 
 struct active_array;
 struct metadata_update;
 
+/* 'struct reshape' records the intermediate states of
+ * a general reshape.
+ * The starting geometry is converted to the 'before' geometry
+ * by at most an atomic level change. They could be the same.
+ * Similarly the 'after' geometry is converted to the final
+ * geometry by at most a level change.
+ * Note that 'before' and 'after' must have the same level.
+ * 'blocks' is the minimum number of sectors for a reshape unit.
+ * This will be a multiple of the stripe size in each of the
+ * 'before' and 'after' geometries.
+ * If 'blocks' is 0, no restriping is necessary.
+ * 'min_offset_change' is the minimum change to data_offset to
+ * allow the reshape to happen.  It is at least the larger of
+ * the old  and new chunk sizes, and typically the same as 'blocks'
+ * divided by number of data disks.
+ */
+struct reshape {
+	int level;
+	int parity; /* number of parity blocks/devices */
+	struct {
+		int layout;
+		int data_disks;
+	} before, after;
+	unsigned long long backup_blocks;
+	unsigned long long min_offset_change;
+	unsigned long long stripes; /* number of old stripes that comprise 'blocks'*/
+	unsigned long long new_size; /* New size of array in sectors */
+};
+
 /* A superswitch provides entry point the a metadata handler.
  *
- * The super_switch primarily operates on some "metadata" that
+ * The superswitch primarily operates on some "metadata" that
  * is accessed via the 'supertype'.
  * This metadata has one of three possible sources.
  * 1/ It is read from a single device.  In this case it may not completely
@@ -507,6 +753,8 @@ extern struct superswitch {
 	void (*brief_examine_super)(struct supertype *st, int verbose);
 	void (*brief_examine_subarrays)(struct supertype *st, int verbose);
 	void (*export_examine_super)(struct supertype *st);
+	int (*examine_badblocks)(struct supertype *st, int fd, char *devname);
+	int (*copy_metadata)(struct supertype *st, int from, int to);
 
 	/* Used to report details of an active array.
 	 * ->load_super was possibly given a 'component' string.
@@ -516,7 +764,8 @@ extern struct superswitch {
 	void (*export_detail_super)(struct supertype *st);
 
 	/* Optional: platform hardware / firmware details */
-	int (*detail_platform)(int verbose, int enumerate_only);
+	int (*detail_platform)(int verbose, int enumerate_only, char *controller_path);
+	int (*export_detail_platform)(int verbose, char *controller_path);
 
 	/* Used:
 	 *   to get uuid to storing in bitmap metadata
@@ -534,9 +783,14 @@ extern struct superswitch {
 	 * The particular device should be:
 	 *   The last device added by add_to_super
 	 *   The device the metadata was loaded from by load_super
+	 * If 'map' is present, then it is an array raid_disks long
+	 * (raid_disk must already be set and correct) and it is filled
+	 * with 1 for slots that are thought to be active and 0 for slots which
+	 * appear to be failed/missing.
+	 * *info is zeroed out before data is added.
 	 */
-	void (*getinfo_super)(struct supertype *st, struct mdinfo *info);
-
+	void (*getinfo_super)(struct supertype *st, struct mdinfo *info, char *map);
+	struct mdinfo *(*getinfo_super_disks)(struct supertype *st);
 	/* Check if the given metadata is flagged as belonging to "this"
 	 * host.  0 for 'no', 1 for 'yes', -1 for "Don't record homehost"
 	 */
@@ -562,6 +816,14 @@ extern struct superswitch {
 	 *   linear-grow-new - add a new device to a linear array, but don't
 	 *                   change the size: so superblock still matches
 	 *   linear-grow-update - now change the size of the array.
+	 *   writemostly - set the WriteMostly1 bit in the superblock devflags
+	 *   readwrite - clear the WriteMostly1 bit in the superblock devflags
+	 *   no-bitmap - clear any record that a bitmap is present.
+	 *   bbl       - add a bad-block-log if possible
+	 *   no-bbl    - remove any bad-block-log is it is empty.
+	 *   force-no-bbl - remove any bad-block-log even if empty.
+	 *   revert-reshape - If a reshape is in progress, modify metadata so
+	 *                    it will resume going in the opposite direction.
 	 */
 	int (*update_super)(struct supertype *st, struct mdinfo *info,
 			    char *update,
@@ -575,13 +837,19 @@ extern struct superswitch {
 	 */
 	int (*init_super)(struct supertype *st, mdu_array_info_t *info,
 			  unsigned long long size, char *name,
-			  char *homehost, int *uuid);
+			  char *homehost, int *uuid,
+			  unsigned long long data_offset);
 
 	/* update the metadata to include new device, either at create or
 	 * when hot-adding a spare.
 	 */
 	int (*add_to_super)(struct supertype *st, mdu_disk_info_t *dinfo,
-			     int fd, char *devname);
+			    int fd, char *devname,
+			    unsigned long long data_offset);
+	/* update the metadata to delete a device,
+	 * when hot-removing.
+	 */
+	int (*remove_from_super)(struct supertype *st, mdu_disk_info_t *dinfo);
 
 	/* Write metadata to one device when fixing problems or adding
 	 * a new device.
@@ -591,41 +859,111 @@ extern struct superswitch {
 	/*  Write all metadata for this array.
 	 */
 	int (*write_init_super)(struct supertype *st);
+	/* Check if metadata read from one device is compatible with an array,
+	 * used when assembling an array, or pseudo-assembling was with
+	 * "--examine --brief"
+	 * If "st" has not yet been loaded the superblock from, "tst" is
+	 * moved in, otherwise the superblock in 'st' is compared with
+	 * 'tst'.
+	 */
 	int (*compare_super)(struct supertype *st, struct supertype *tst);
+	/* Load metadata from a single device.  If 'devname' is not NULL
+	 * print error messages as appropriate */
 	int (*load_super)(struct supertype *st, int fd, char *devname);
+	/* 'fd' is a 'container' md array - load array metadata from the
+	 * whole container.
+	 */
+	int (*load_container)(struct supertype *st, int fd, char *devname);
+	/* If 'arg' is a valid name of this metadata type, allocate and
+	 * return a 'supertype' for the particular minor version */
 	struct supertype * (*match_metadata_desc)(char *arg);
-	__u64 (*avail_size)(struct supertype *st, __u64 size);
+	/* If a device has the given size, and the data_offset has been
+	 * requested - work out how much space is available for data.
+	 * This involves adjusting for reserved space (e.g. bitmaps)
+	 * and for any rounding.
+	 * 'mdadm' only calls this for existing arrays where a possible
+	 * spare is being added.  However some super-handlers call it
+	 * internally from validate_geometry when creating an array.
+	 */
+	__u64 (*avail_size)(struct supertype *st, __u64 size,
+			    unsigned long long data_offset);
+	/* This is similar to 'avail_size' in purpose, but is used for
+	 * containers for which there is no 'component size' to compare.
+	 * This reports that whole-device size which is a minimum
+	 */
+	unsigned long long (*min_acceptable_spare_size)(struct supertype *st);
+	/* Find somewhere to put a bitmap - possibly auto-size it - and
+	 * update the metadata to record this.  The array may be newly
+	 * created, in which case data_size may be updated, or it might
+	 * already exist.  Metadata handler can know if init_super
+	 * has been called, but not write_init_super.
+	 */
 	int (*add_internal_bitmap)(struct supertype *st, int *chunkp,
 				   int delay, int write_behind,
 				   unsigned long long size, int may_change, int major);
-	void (*locate_bitmap)(struct supertype *st, int fd);
-	int (*write_bitmap)(struct supertype *st, int fd);
+	/* Seek 'fd' to start of write-intent-bitmap.  Must be an
+	 * md-native format bitmap
+	 */
+	int (*locate_bitmap)(struct supertype *st, int fd);
+	/* if add_internal_bitmap succeeded for existing array, this
+	 * writes it out.
+	 */
+	int (*write_bitmap)(struct supertype *st, int fd, enum bitmap_update update);
+	/* Free the superblock and any other allocated data */
 	void (*free_super)(struct supertype *st);
 
 	/* validate_geometry is called with an st returned by
 	 * match_metadata_desc.
-	 * It should check that the geometry described in compatible with
+	 * It should check that the geometry described is compatible with
 	 * the metadata type.  It will be called repeatedly as devices
 	 * added to validate changing size and new devices.  If there are
 	 * inter-device dependencies, it should record sufficient details
 	 * so these can be validated.
-	 * Both 'size' and '*freesize' are in sectors.  chunk is bytes.
+	 * Both 'size' and '*freesize' are in sectors.  chunk is KiB.
+	 * Return value is:
+	 *  1: everything is OK
+	 *  0: not OK for some reason - if 'verbose', then error was reported.
+	 * -1: st->sb was NULL, 'subdev' is a member of a container of this
+	 *     type, but array is not acceptable for some reason
+	 *     message was reported even if verbose is 0.
 	 */
 	int (*validate_geometry)(struct supertype *st, int level, int layout,
 				 int raiddisks,
-				 int chunk, unsigned long long size,
+				 int *chunk, unsigned long long size,
+				 unsigned long long data_offset,
 				 char *subdev, unsigned long long *freesize,
 				 int verbose);
 
-	struct mdinfo *(*container_content)(struct supertype *st);
-	/* Allow a metadata handler to override mdadm's default layouts */
-	int (*default_layout)(int level); /* optional */
-	/* query the supertype for default chunk size */
-	int (*default_chunk)(struct supertype *st); /* optional */
+	/* Return a linked list of 'mdinfo' structures for all arrays
+	 * in the container.  For non-containers, it is like
+	 * getinfo_super with an allocated mdinfo.*/
+	struct mdinfo *(*container_content)(struct supertype *st, char *subarray);
+	/* query the supertype for default geometry */
+	void (*default_geometry)(struct supertype *st, int *level, int *layout, int *chunk); /* optional */
 	/* Permit subarray's to be deleted from inactive containers */
 	int (*kill_subarray)(struct supertype *st); /* optional */
 	/* Permit subarray's to be modified */
-	int (*update_subarray)(struct supertype *st, char *update, mddev_ident_t ident); /* optional */
+	int (*update_subarray)(struct supertype *st, char *subarray,
+			       char *update, struct mddev_ident *ident); /* optional */
+	/* Check if reshape is supported for this external format.
+	 * st is obtained from super_by_fd() where st->subarray[0] is
+	 * initialized to indicate if reshape is being performed at the
+	 * container or subarray level
+	 */
+#define APPLY_METADATA_CHANGES		1
+#define ROLLBACK_METADATA_CHANGES	0
+
+	int (*reshape_super)(struct supertype *st,
+			     unsigned long long size, int level,
+			     int layout, int chunksize, int raid_disks,
+			     int delta_disks, char *backup, char *dev,
+			     int direction,
+			     int verbose); /* optional */
+	int (*manage_reshape)( /* optional */
+		int afd, struct mdinfo *sra, struct reshape *reshape,
+		struct supertype *st, unsigned long blocks,
+		int *fds, unsigned long long *offsets,
+		int dests, int *destfd, unsigned long long *destoffsets);
 
 /* for mdmon */
 	int (*open_new)(struct supertype *c, struct active_array *a,
@@ -637,7 +975,7 @@ extern struct superswitch {
 	 * (in a->resync_start).
 	 * resync status is really irrelevant if the array is not consistent,
 	 * but some metadata (DDF!) have a place to record the distinction.
-	 * If 'consistent' is '2', then the array can mark it dirty if a 
+	 * If 'consistent' is '2', then the array can mark it dirty if a
 	 * resync/recovery/whatever is required, or leave it clean if not.
 	 * Return value is 0 dirty (not consistent) and 1 if clean.
 	 * it is only really important if consistent is passed in as '2'.
@@ -655,7 +993,10 @@ extern struct superswitch {
 	void (*sync_metadata)(struct supertype *st);
 	void (*process_update)(struct supertype *st,
 			       struct metadata_update *update);
-	void (*prepare_update)(struct supertype *st,
+	/* Prepare updates allocates extra memory that might be
+	 * needed.  If the update cannot be understood,  return 0.
+	 */
+	int (*prepare_update)(struct supertype *st,
 			       struct metadata_update *update);
 
 	/* activate_spare will check if the array is degraded and, if it
@@ -667,18 +1008,44 @@ extern struct superswitch {
 	 */
 	struct mdinfo *(*activate_spare)(struct active_array *a,
 					 struct metadata_update **updates);
+	/*
+	 * Return statically allocated string that represents metadata specific
+	 * controller domain of the disk. The domain is used in disk domain
+	 * matching functions. Disks belong to the same domain if the they have
+	 * the same domain from mdadm.conf and belong the same metadata domain.
+	 * Returning NULL or not providing this handler means that metadata
+	 * does not distinguish the differences between disks that belong to
+	 * different controllers. They are in the domain specified by
+	 * configuration file (mdadm.conf).
+	 * In case when the metadata has the notion of domains based on disk
+	 * it shall return NULL for disks that do not belong to the controller
+	 * the supported domains. Such disks will form another domain and won't
+	 * be mixed with supported ones.
+	 */
+	const char *(*get_disk_controller_domain)(const char *path);
+
+	/* for external backup area */
+	int (*recover_backup)(struct supertype *st, struct mdinfo *info);
+
+	/* validate container after assemble */
+	int (*validate_container)(struct mdinfo *info);
 
 	int swapuuid; /* true if uuid is bigending rather than hostendian */
 	int external;
 	const char *name; /* canonical metadata name */
-} super0, super1, super_ddf, *superlist[];
+} *superlist[];
 
-extern struct superswitch super_imsm;
+extern struct superswitch super0, super1;
+extern struct superswitch super_imsm, super_ddf;
+extern struct superswitch mbr, gpt;
 
 struct metadata_update {
 	int	len;
 	char	*buf;
 	void	*space; /* allocated space that monitor will use */
+	void	**space_list; /* list of allocated spaces that monitor can
+			       * use or that it returned.
+			       */
 	struct metadata_update *next;
 };
 
@@ -703,36 +1070,143 @@ struct supertype {
 	struct superswitch *ss;
 	int minor_version;
 	int max_devs;
-	int container_dev;    /* devnum of container */
-	char subarray[32];	/* name of array inside container */
+	char container_devnm[32];    /* devnm of container */
 	void *sb;
 	void *info;
-	int loaded_container;	/* Set if load_super found a container,
-				 * not just one device */
-
+	void *other; /* Hack used to convert v0.90 to v1.0 */
+	unsigned long long devsize;
+	unsigned long long data_offset; /* used by v1.x only */
+	int ignore_hw_compat; /* used to inform metadata handlers that it should ignore
+				 HW/firmware related incompatability to load metadata.
+				 Used when examining metadata to display content of disk
+				 when user has no hw/firmare compatible system.
+			      */
 	struct metadata_update *updates;
 	struct metadata_update **update_tail;
 
 	/* extra stuff used by mdmon */
 	struct active_array *arrays;
 	int sock; /* listen to external programs */
-	int devnum;
-	char *devname; /* e.g. md0.  This appears in metadata_verison:
-			*  external:/md0/12
-			*/
+	char devnm[32]; /* e.g. md0.  This appears in metadata_version:
+			 *  external:/md0/12
+			 */
 	int devcnt;
+	int retry_soon;
+	int nodes;
+	char *cluster_name;
 
 	struct mdinfo *devs;
 
 };
 
-extern struct supertype *super_by_fd(int fd);
-extern struct supertype *guess_super(int fd);
+extern struct supertype *super_by_fd(int fd, char **subarray);
+enum guess_types { guess_any, guess_array, guess_partitions };
+extern struct supertype *guess_super_type(int fd, enum guess_types guess_type);
+static inline struct supertype *guess_super(int fd) {
+	return guess_super_type(fd, guess_any);
+}
 extern struct supertype *dup_super(struct supertype *st);
 extern int get_dev_size(int fd, char *dname, unsigned long long *sizep);
-extern void get_one_disk(int mdfd, mdu_array_info_t *ainf,
-			 mdu_disk_info_t *disk);
+extern int must_be_container(int fd);
+extern int dev_size_from_id(dev_t id, unsigned long long *size);
 void wait_for(char *dev, int fd);
+
+/*
+ * Data structures for policy management.
+ * Each device can have a policy structure that lists
+ * various name/value pairs each possibly with a metadata associated.
+ * The policy list is sorted by name/value/metadata
+ */
+struct dev_policy {
+	struct dev_policy *next;
+	char *name;	/* None of these strings are allocated.  They are
+			 * all just references to strings which are known
+			 * to exist elsewhere.
+			 * name and metadata can be compared by address equality.
+			 */
+	const char *metadata;
+	const char *value;
+};
+
+extern char pol_act[], pol_domain[], pol_metadata[], pol_auto[];
+
+/* iterate over the sublist starting at list, having the same
+ * 'name' as 'list', and matching the given metadata (Where
+ * NULL matches anything
+ */
+#define pol_for_each(item, list, _metadata)				\
+	for (item = list;						\
+	     item && item->name == list->name;				\
+	     item = item->next)						\
+		if (!(!_metadata || !item->metadata || _metadata == item->metadata)) \
+			; else
+
+/*
+ * policy records read from mdadm are largely just name-value pairs.
+ * The names are constants, not strdupped
+ */
+struct pol_rule {
+	struct pol_rule *next;
+	char *type;	/* rule_policy or rule_part */
+	struct rule {
+		struct rule *next;
+		char *name;
+		char *value;
+		char *dups; /* duplicates of 'value' with a partNN appended */
+	} *rule;
+};
+
+extern char rule_policy[], rule_part[];
+extern char rule_path[], rule_type[];
+extern char type_part[], type_disk[];
+
+extern void policyline(char *line, char *type);
+extern void policy_add(char *type, ...);
+extern void policy_free(void);
+
+extern struct dev_policy *path_policy(char *path, char *type);
+extern struct dev_policy *disk_policy(struct mdinfo *disk);
+extern struct dev_policy *devid_policy(int devid);
+extern void dev_policy_free(struct dev_policy *p);
+
+//extern void pol_new(struct dev_policy **pol, char *name, char *val, char *metadata);
+extern void pol_add(struct dev_policy **pol, char *name, char *val, char *metadata);
+extern struct dev_policy *pol_find(struct dev_policy *pol, char *name);
+
+enum policy_action {
+	act_default,
+	act_include,
+	act_re_add,
+	act_spare,	/* This only applies to bare devices */
+	act_spare_same_slot, /* this allows non-bare devices,
+			      * but only if recent removal */
+	act_force_spare, /* this allow non-bare devices in any case */
+	act_err
+};
+
+extern int policy_action_allows(struct dev_policy *plist, const char *metadata,
+				enum policy_action want);
+extern int disk_action_allows(struct mdinfo *disk, const char *metadata,
+			      enum policy_action want);
+
+struct domainlist {
+	struct domainlist *next;
+	const char *dom;
+};
+
+extern int domain_test(struct domainlist *dom, struct dev_policy *pol,
+		       const char *metadata);
+extern struct domainlist *domain_from_array(struct mdinfo *mdi,
+					    const char *metadata);
+extern void domainlist_add_dev(struct domainlist **dom, int devid,
+			       const char *metadata);
+extern void domain_free(struct domainlist *dl);
+extern void domain_merge(struct domainlist **domp, struct dev_policy *pol,
+			 const char *metadata);
+void domain_add(struct domainlist **domp, char *domain);
+
+extern void policy_save_path(char *id_path, struct map_ent *array);
+extern int policy_check_path(struct mdinfo *disk, struct map_ent *array);
 
 #if __GNUC__ < 3
 struct stat64;
@@ -774,116 +1248,149 @@ struct stat64;
 
 extern int add_dev(const char *name, const struct stat *stb, int flag, struct FTW *s);
 
-
 extern int Manage_ro(char *devname, int fd, int readonly);
-extern int Manage_runstop(char *devname, int fd, int runstop, int quiet);
-extern int Manage_resize(char *devname, int fd, long long size, int raid_disks);
+extern int Manage_run(char *devname, int fd, struct context *c);
+extern int Manage_stop(char *devname, int fd, int quiet,
+		       int will_retry);
 extern int Manage_subdevs(char *devname, int fd,
-			  mddev_dev_t devlist, int verbose, int test);
+			  struct mddev_dev *devlist, int verbose, int test,
+			  char *update, int force);
 extern int autodetect(void);
 extern int Grow_Add_device(char *devname, int fd, char *newdev);
-extern int Grow_addbitmap(char *devname, int fd, char *file, int chunk, int delay, int write_behind, int force);
-extern int Grow_reshape(char *devname, int fd, int quiet, char *backup_file,
-			long long size,
-			int level, char *layout_str, int chunksize, int raid_disks);
+extern int Grow_addbitmap(char *devname, int fd,
+			  struct context *c, struct shape *s);
+extern int Grow_reshape(char *devname, int fd,
+			struct mddev_dev *devlist,
+			unsigned long long data_offset,
+			struct context *c, struct shape *s);
 extern int Grow_restart(struct supertype *st, struct mdinfo *info,
 			int *fdlist, int cnt, char *backup_file, int verbose);
 extern int Grow_continue(int mdfd, struct supertype *st,
-			 struct mdinfo *info, char *backup_file);
+			 struct mdinfo *info, char *backup_file,
+			 int forked, int freeze_reshape);
+
+extern int restore_backup(struct supertype *st,
+			  struct mdinfo *content,
+			  int working_disks,
+			  int spares,
+			  char **backup_filep,
+			  int verbose);
+extern int Grow_continue_command(char *devname, int fd,
+				 char *backup_file, int verbose);
 
 extern int Assemble(struct supertype *st, char *mddev,
-		    mddev_ident_t ident,
-		    mddev_dev_t devlist, char *backup_file,
-		    int readonly, int runstop,
-		    char *update, char *homehost, int require_homehost,
-		    int verbose, int force);
+		    struct mddev_ident *ident,
+		    struct mddev_dev *devlist,
+		    struct context *c);
 
-extern int Build(char *mddev, int chunk, int level, int layout,
-		 int raiddisks, mddev_dev_t devlist, int assume_clean,
-		 char *bitmap_file, int bitmap_chunk, int write_behind,
-		 int delay, int verbose, int autof, unsigned long long size);
-
+extern int Build(char *mddev, struct mddev_dev *devlist,
+		 struct shape *s, struct context *c);
 
 extern int Create(struct supertype *st, char *mddev,
-		  int chunk, int level, int layout, unsigned long long size, int raiddisks, int sparedisks,
-		  char *name, char *homehost, int *uuid,
-		  int subdevs, mddev_dev_t devlist,
-		  int runstop, int verbose, int force, int assume_clean,
-		  char *bitmap_file, int bitmap_chunk, int write_behind, int delay, int autof);
+		  char *name, int *uuid,
+		  int subdevs, struct mddev_dev *devlist,
+		  struct shape *s,
+		  struct context *c,
+		  unsigned long long data_offset);
 
-extern int Detail(char *dev, int brief, int export, int test, char *homehost);
-extern int Detail_Platform(struct superswitch *ss, int scan, int verbose);
+extern int Detail(char *dev, struct context *c);
+extern int Detail_Platform(struct superswitch *ss, int scan, int verbose, int export, char *controller_path);
 extern int Query(char *dev);
-extern int Examine(mddev_dev_t devlist, int brief, int export, int scan,
-		   int SparcAdjust, struct supertype *forcest, char *homehost);
-extern int Monitor(mddev_dev_t devlist,
+extern int ExamineBadblocks(char *devname, int brief, struct supertype *forcest);
+extern int Examine(struct mddev_dev *devlist, struct context *c,
+		   struct supertype *forcest);
+extern int Monitor(struct mddev_dev *devlist,
 		   char *mailaddr, char *alert_cmd,
-		   int period, int daemonise, int scan, int oneshot,
-		   int dosyslog, int test, char *pidfile, int increments);
+		   struct context *c,
+		   int daemonise, int oneshot,
+		   int dosyslog, char *pidfile, int increments,
+		   int share);
 
-extern int Kill(char *dev, struct supertype *st, int force, int quiet, int noexcl);
-extern int Kill_subarray(char *dev, char *subarray, int quiet);
-extern int Update_subarray(char *dev, char *subarray, char *update, mddev_ident_t ident, int quiet);
+extern int Kill(char *dev, struct supertype *st, int force, int verbose, int noexcl);
+extern int Kill_subarray(char *dev, char *subarray, int verbose);
+extern int Update_subarray(char *dev, char *subarray, char *update, struct mddev_ident *ident, int quiet);
 extern int Wait(char *dev);
 extern int WaitClean(char *dev, int sock, int verbose);
+extern int SetAction(char *dev, char *action);
 
-extern int Incremental(char *devname, int verbose, int runstop,
-		       struct supertype *st, char *homehost, int require_homehost,
-		       int autof);
-extern int Incremental_container(struct supertype *st, char *devname,
-				 int verbose, int runstop, int autof,
-				 int trustworthy);
+extern int Incremental(struct mddev_dev *devlist, struct context *c,
+		       struct supertype *st);
 extern void RebuildMap(void);
-extern int IncrementalScan(int verbose);
-extern int IncrementalRemove(char *devname, int verbose);
+extern int IncrementalScan(struct context *c, char *devnm);
+extern int IncrementalRemove(char *devname, char *path, int verbose);
 extern int CreateBitmap(char *filename, int force, char uuid[16],
 			unsigned long chunksize, unsigned long daemon_sleep,
 			unsigned long write_behind,
 			unsigned long long array_size,
 			int major);
 extern int ExamineBitmap(char *filename, int brief, struct supertype *st);
+extern int Write_rules(char *rule_name);
 extern int bitmap_update_uuid(int fd, int *uuid, int swap);
 extern unsigned long bitmap_sectors(struct bitmap_super_s *bsb);
+extern int Dump_metadata(char *dev, char *dir, struct context *c,
+			 struct supertype *st);
+extern int Restore_metadata(char *dev, char *dir, struct context *c,
+			    struct supertype *st, int only);
 
 extern int md_get_version(int fd);
 extern int get_linux_version(void);
-extern long long parse_size(char *size);
+extern int mdadm_version(char *version);
+extern unsigned long long parse_size(char *size);
 extern int parse_uuid(char *str, int uuid[4]);
 extern int parse_layout_10(char *layout);
 extern int parse_layout_faulty(char *layout);
+extern long parse_num(char *num);
+extern int parse_cluster_confirm_arg(char *inp, char **devname, int *slot);
 extern int check_ext2(int fd, char *name);
 extern int check_reiser(int fd, char *name);
 extern int check_raid(int fd, char *name);
-extern int check_partitions(int fd, char *dname, unsigned long long freesize);
+extern int check_partitions(int fd, char *dname,
+			    unsigned long long freesize,
+			    unsigned long long size);
 
 extern int get_mdp_major(void);
+extern int get_maj_min(char *dev, int *major, int *minor);
 extern int dev_open(char *dev, int flags);
-extern int open_dev(int devnum);
-extern int open_dev_excl(int devnum);
+extern int open_dev(char *devnm);
+extern void reopen_mddev(int mdfd);
+extern int open_dev_flags(char *devnm, int flags);
+extern int open_dev_excl(char *devnm);
 extern int is_standard(char *dev, int *nump);
 extern int same_dev(char *one, char *two);
+extern int compare_paths (char* path1,char* path2);
+extern void enable_fds(int devices);
 
 extern int parse_auto(char *str, char *msg, int config);
-extern mddev_ident_t conf_get_ident(char *dev);
-extern mddev_dev_t conf_get_devs(void);
+extern struct mddev_ident *conf_get_ident(char *dev);
+extern struct mddev_dev *conf_get_devs(void);
 extern int conf_test_dev(char *devname);
-extern int conf_test_metadata(const char *version, int is_homehost);
+extern int conf_test_metadata(const char *version, struct dev_policy *pol, int is_homehost);
 extern struct createinfo *conf_get_create_info(void);
 extern void set_conffile(char *file);
 extern char *conf_get_mailaddr(void);
 extern char *conf_get_mailfrom(void);
 extern char *conf_get_program(void);
 extern char *conf_get_homehost(int *require_homehostp);
+extern char *conf_get_homecluster(void);
 extern char *conf_line(FILE *file);
 extern char *conf_word(FILE *file, int allow_key);
+extern void print_quoted(char *str);
+extern void print_escape(char *str);
+extern int use_udev(void);
+extern unsigned long GCD(unsigned long a, unsigned long b);
 extern int conf_name_is_free(char *name);
+extern int conf_verify_devnames(struct mddev_ident *array_list);
 extern int devname_matches(char *name, char *match);
-extern struct mddev_ident_s *conf_match(struct mdinfo *info, struct supertype *st);
+extern struct mddev_ident *conf_match(struct supertype *st,
+				      struct mdinfo *info,
+				      char *devname,
+				      int verbose, int *rvp);
+extern int experimental(void);
 
 extern void free_line(char *line);
 extern int match_oneof(char *devices, char *devname);
 extern void uuid_from_super(int uuid[4], mdp_super_t *super);
-extern const int uuid_match_any[4];
+extern const int uuid_zero[4];
 extern int same_uuid(int a[4], int b[4], int swapuuid);
 extern void copy_uuid(void *a, int b[4], int swapuuid);
 extern char *__fname_from_uuid(int id[4], int swap, char *buf, char sep);
@@ -891,33 +1398,50 @@ extern char *fname_from_uuid(struct supertype *st,
 			     struct mdinfo *info, char *buf, char sep);
 extern unsigned long calc_csum(void *super, int bytes);
 extern int enough(int level, int raid_disks, int layout, int clean,
-		   char *avail, int avail_disks);
+		   char *avail);
+extern int enough_fd(int fd);
 extern int ask(char *mesg);
 extern unsigned long long get_component_size(int fd);
 extern void remove_partitions(int fd);
 extern int test_partition(int fd);
+extern int test_partition_from_id(dev_t id);
+extern int get_data_disks(int level, int layout, int raid_disks);
 extern unsigned long long calc_array_size(int level, int raid_disks, int layout,
 				   int chunksize, unsigned long long devsize);
 extern int flush_metadata_updates(struct supertype *st);
 extern void append_metadata_update(struct supertype *st, void *buf, int len);
 extern int assemble_container_content(struct supertype *st, int mdfd,
-				      struct mdinfo *content, int runstop,
-				      char *chosen_name, int verbose);
-
+				      struct mdinfo *content,
+				      struct context *c,
+				      char *chosen_name, int *result);
+#define	INCR_NO		1
+#define	INCR_UNSAFE	2
+#define	INCR_ALREADY	4
+#define	INCR_YES	8
+extern struct mdinfo *container_choose_spares(struct supertype *st,
+					      unsigned long long min_size,
+					      struct domainlist *domlist,
+					      char *spare_group,
+					      const char *metadata, int get_one);
+extern int move_spare(char *from_devname, char *to_devname, dev_t devid);
 extern int add_disk(int mdfd, struct supertype *st,
 		    struct mdinfo *sra, struct mdinfo *info);
+extern int remove_disk(int mdfd, struct supertype *st,
+		       struct mdinfo *sra, struct mdinfo *info);
 extern int set_array_info(int mdfd, struct supertype *st, struct mdinfo *info);
 unsigned long long min_recovery_start(struct mdinfo *array);
 
 extern char *human_size(long long bytes);
-extern char *human_size_brief(long long bytes);
+extern char *human_size_brief(long long bytes, int prefix);
 extern void print_r10_layout(int layout);
 
-#define NoMdDev (1<<23)
-extern int find_free_devnum(int use_partitions);
+extern char *find_free_devnm(int use_partitions);
 
 extern void put_md_name(char *name);
-extern char *get_md_name(int dev);
+extern char *devid2kname(int devid);
+extern char *devid2devnm(int devid);
+extern int devnm2devid(char *devnm);
+extern char *get_md_name(char *devnm);
 
 extern char DefaultConfFile[];
 
@@ -930,60 +1454,105 @@ extern int create_mddev(char *dev, char *name, int autof, int trustworthy,
 #define	METADATA 3
 extern int open_mddev(char *dev, int report_errors);
 extern int open_container(int fd);
+extern int metadata_container_matches(char *metadata, char *devnm);
+extern int metadata_subdev_matches(char *metadata, char *devnm);
 extern int is_container_member(struct mdstat_ent *ent, char *devname);
 extern int is_subarray_active(char *subarray, char *devname);
-int is_container_active(char *devname);
-extern int open_subarray(char *dev, struct supertype *st, int quiet);
+extern int open_subarray(char *dev, char *subarray, struct supertype *st, int quiet);
 extern struct superswitch *version_to_superswitch(char *vers);
 
-extern int mdmon_running(int devnum);
-extern int mdmon_pid(int devnum);
+extern int mdmon_running(char *devnm);
+extern int mdmon_pid(char *devnm);
 extern int check_env(char *name);
 extern __u32 random32(void);
-extern int start_mdmon(int devnum);
+extern int start_mdmon(char *devnm);
 
-extern char *devnum2devname(int num);
-extern int devname2devnum(char *name);
-extern int stat2devnum(struct stat *st);
-extern int fd2devnum(int fd);
+extern int child_monitor(int afd, struct mdinfo *sra, struct reshape *reshape,
+			 struct supertype *st, unsigned long stripes,
+			 int *fds, unsigned long long *offsets,
+			 int dests, int *destfd, unsigned long long *destoffsets);
+void abort_reshape(struct mdinfo *sra);
 
-static inline int dev2major(int d)
-{
-	if (d >= 0)
-		return MD_MAJOR;
-	else
-		return get_mdp_major();
-}
+void *super1_make_v0(struct supertype *st, struct mdinfo *info, mdp_super_t *sb0);
 
-static inline int dev2minor(int d)
-{
-	if (d >= 0)
-		return d;
-	return (-1-d) << MdpMinorShift;
-}
+extern void fmt_devname(char *name, int num);
+extern char *stat2devnm(struct stat *st);
+extern char *fd2devnm(int fd);
 
-static inline int ROUND_UP(int a, int base)
-{
-	return ((a+base-1)/base)*base;
-}
+extern int in_initrd(void);
+
+struct cmap_hooks {
+	void *cmap_handle;      /* corosync lib related */
+
+	int (*initialize)(cmap_handle_t *handle);
+	int (*get_string)(cmap_handle_t handle,
+			  const char *string,
+			  char **name);
+	int (*finalize)(cmap_handle_t handle);
+};
+
+extern void set_cmap_hooks(void);
+extern void set_hooks(void);
+
+struct dlm_hooks {
+	void *dlm_handle;	/* dlm lib related */
+
+	dlm_lshandle_t (*create_lockspace)(const char *name,
+					   unsigned int mode);
+	int (*release_lockspace)(const char *name, dlm_lshandle_t ls,
+				 int force);
+	int (*ls_lock)(dlm_lshandle_t lockspace, uint32_t mode,
+		       struct dlm_lksb *lksb, uint32_t flags,
+		       const void *name, unsigned int namelen,
+		       uint32_t parent, void (*astaddr) (void *astarg),
+		       void *astarg, void (*bastaddr) (void *astarg),
+		       void *range);
+	int (*ls_unlock)(dlm_lshandle_t lockspace, uint32_t lkid,
+			 uint32_t flags, struct dlm_lksb *lksb,
+			 void *astarg);
+	int (*ls_get_fd)(dlm_lshandle_t ls);
+	int (*dispatch)(int fd);
+};
+
+extern int get_cluster_name(char **name);
+extern int dlm_funs_ready(void);
+extern int cluster_get_dlmlock(int *lockid);
+extern int cluster_release_dlmlock(int lockid);
+extern void set_dlm_hooks(void);
+
+#define _ROUND_UP(val, base)	(((val) + (base) - 1) & ~(base - 1))
+#define ROUND_UP(val, base)	_ROUND_UP(val, (typeof(val))(base))
+#define ROUND_UP_PTR(ptr, base)	((typeof(ptr)) \
+				 (ROUND_UP((unsigned long)(ptr), base)))
 
 static inline int is_subarray(char *vers)
 {
 	/* The version string for a 'subarray' (an array in a container)
-	 * is 
+	 * is
 	 *    /containername/componentname    for normal read-write arrays
-	 *    -containername/componentname    for read-only arrays.
+	 *    -containername/componentname    for arrays which mdmon must not
+	 *				      reconfigure.  They might be read-only
+	 *				      or might be undergoing reshape etc.
 	 * containername is e.g. md0, md_d1
 	 * componentname is dependant on the metadata. e.g. '1' 'S1' ...
 	 */
 	return (*vers == '/' || *vers == '-');
 }
 
+static inline char *to_subarray(struct mdstat_ent *ent, char *container)
+{
+	return &ent->metadata_version[10+strlen(container)+1];
+}
+
 #ifdef DEBUG
 #define dprintf(fmt, arg...) \
+	fprintf(stderr, "%s: %s: "fmt, Name, __func__, ##arg)
+#define dprintf_cont(fmt, arg...) \
 	fprintf(stderr, fmt, ##arg)
 #else
 #define dprintf(fmt, arg...) \
+        ({ if (0) fprintf(stderr, "%s: %s: " fmt, Name, __func__, ##arg); 0; })
+#define dprintf_cont(fmt, arg...) \
         ({ if (0) fprintf(stderr, fmt, ##arg); 0; })
 #endif
 #include <assert.h>
@@ -998,6 +1567,18 @@ static inline int xasprintf(char **strp, const char *fmt, ...) {
 	return ret;
 }
 
+#ifdef DEBUG
+#define pr_err(fmt, args...) fprintf(stderr, "%s: %s: "fmt, Name, __func__, ##args)
+#else
+#define pr_err(fmt, args...) fprintf(stderr, "%s: "fmt, Name, ##args)
+#endif
+#define cont_err(fmt ...) fprintf(stderr, "       " fmt)
+
+void *xmalloc(size_t len);
+void *xrealloc(void *ptr, size_t len);
+void *xcalloc(size_t num, size_t size);
+char *xstrdup(const char *str);
+
 #define	LEVEL_MULTIPATH		(-4)
 #define	LEVEL_LINEAR		(-1)
 #define	LEVEL_FAULTY		(-5)
@@ -1006,6 +1587,8 @@ static inline int xasprintf(char **strp, const char *fmt, ...) {
 #define LEVEL_CONTAINER		(-100)
 #define	LEVEL_UNSUPPORTED	(-200)
 
+/* the kernel does know about this one ... */
+#define	LEVEL_NONE		(-1000000)
 
 /* faulty stuff */
 
@@ -1025,7 +1608,6 @@ static inline int xasprintf(char **strp, const char *fmt, ...) {
 
 #define	ModeMask	0x1f
 #define	ModeShift	5
-
 
 #ifdef __TINYC__
 #undef minor
@@ -1064,7 +1646,6 @@ static inline int xasprintf(char **strp, const char *fmt, ...) {
 #define ALGORITHM_ROTATING_N_RESTART	9 /* DDF PRL=6 RLQ=2 */
 #define ALGORITHM_ROTATING_N_CONTINUE	10 /*DDF PRL=6 RLQ=3 */
 
-
 /* For every RAID5 algorithm we define a RAID6 algorithm
  * with exactly the same layout for data and parity, and
  * with the Q block always on the last device (N-1).
@@ -1084,3 +1665,27 @@ static inline int xasprintf(char **strp, const char *fmt, ...) {
 #define PATH_MAX	4096
 #endif
 
+#define RESYNC_NONE -1
+#define RESYNC_DELAYED -2
+#define RESYNC_PENDING -3
+#define RESYNC_UNKNOWN -4
+
+/* When using "GET_DISK_INFO" it isn't certain how high
+ * we need to check.  So we impose an absolute limit of
+ * MAX_DISKS.  This needs to be much more than the largest
+ * number of devices any metadata can support.  Currently
+ * v1.x can support 1920
+ */
+#define MAX_DISKS	4096
+
+/* Sometimes the 'size' value passed needs to mean "Maximum".
+ * In those cases with use MAX_SIZE
+ */
+#define MAX_SIZE	1
+
+/* We want to use unsigned numbers for sector counts, but need
+ * a value for 'invalid'.  Use '1'.
+ */
+#define INVALID_SECTORS 1
+/* And another special number needed for --data_offset=variable */
+#define VARIABLE_OFFSET 3

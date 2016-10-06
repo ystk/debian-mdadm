@@ -8,7 +8,7 @@ dd if=/dev/urandom of=/tmp/RandFile bs=1024 count=$testK
 export MDADM_GROW_VERIFY=1
 
 dotest() {
- sleep 0.5
+ sleep 2
  check wait
  testdev $md0 $1 19968 64 nd
  blockdev --flushbufs $md0
@@ -26,7 +26,8 @@ checkgeo() {
  shift
  sleep 0.5
  check wait
- for attr in level raid_disks chunk_size layout 
+ sleep 1
+ for attr in level raid_disks chunk_size layout
  do
    if [ $# -gt 0 ] ; then
       val=$1
@@ -38,7 +39,7 @@ checkgeo() {
    fi
  done
 }
-   
+
 
 bu=/tmp/md-test-backup
 rm -f $bu
@@ -59,13 +60,16 @@ dotest 3
 
 mdadm -G /dev/md0 --array-size 39936
 mdadm -G $md0 -n4 --backup-file $bu
+checkgeo md0 raid6 4 $[32*1024]
 dotest 2
 
 mdadm -G $md0 -l5 --backup-file $bu
+checkgeo md0 raid5 3 $[32*1024]
 dotest 2
 
 mdadm -G /dev/md0 --array-size 19968
 mdadm -G $md0 -n2 --backup-file $bu
+checkgeo md0 raid5 2 $[32*1024]
 dotest 1
 
 mdadm -G --level=1 $md0
@@ -79,9 +83,10 @@ dotest 3
 
 mdadm $md0 --fail $dev0
 
-mdadm -G /dev/md0 --array-size 39936
+mdadm -G /dev/md0 --array-size 37888
 mdadm -G $md0 -n4 --backup-file $bu
 dotest 2
+checkgeo md0 raid6 4 $[512*1024]
 mdadm $md0 --fail $dev4
 
 mdadm $md0 --fail $dev3
@@ -98,10 +103,12 @@ dotest 2
 mdadm -G $md0 -l5 --backup-file $bu
 dotest 2
 
-mdadm -G /dev/md0 --array-size 19968
+mdadm -G /dev/md0 --array-size 18944
 mdadm -G $md0 -n2 --backup-file $bu
 dotest 1
+checkgeo md0 raid5 2 $[512*1024]
 mdadm $md0 --fail $dev2
 
 mdadm -G --level=1 $md0
 dotest 1
+checkgeo md0 raid1 2

@@ -1,11 +1,11 @@
 .\" See file COPYING in distribution for details.
-.TH MDMON 8 "" v3.1.4
+.TH MDMON 8 "" v3.4
 .SH NAME
 mdmon \- monitor MD external metadata arrays
 
 .SH SYNOPSIS
 
-.BI mdmon " [--all] [--takeover] CONTAINER"
+.BI mdmon " [--all] [--takeover] [--foreground] CONTAINER"
 
 .SH OVERVIEW
 The 2.6.27 kernel brings the ability to support external metadata arrays.
@@ -101,10 +101,10 @@ call is still required.
 External metadata formats, like DDF, differ from the native MD metadata
 formats in that they define a set of disks and a series of sub-arrays
 within those disks.  MD metadata in comparison defines a 1:1
-relationship between a set of block devices and a raid array.  For
-example to create 2 arrays at different raid levels on a single
+relationship between a set of block devices and a RAID array.  For
+example to create 2 arrays at different RAID levels on a single
 set of disks, MD metadata requires the disks be partitioned and then
-each array can created be created with a subset of those partitions.  The
+each array can be created with a subset of those partitions.  The
 supported external formats perform this disk carving internally.
 .P
 Container devices simply hold references to all member disks and allow
@@ -130,6 +130,14 @@ The
 .B container
 device to monitor.  It can be a full path like /dev/md/container, or a
 simple md device name like md127.
+.TP
+.B \-\-foreground
+Normally,
+.I mdmon
+will fork and continue in the background.  Adding this option will
+skip that step and run
+.I mdmon
+in the foreground.
 .TP
 .B \-\-takeover
 This instructs
@@ -165,6 +173,7 @@ argument is over-written with the name of the container.  To allow for
 containers with names longer than 5 characters, this argument can be
 arbitrarily extended, e.g. to
 .BR \-\-all-active-arrays .
+.TP
 
 .PP
 Note that
@@ -172,7 +181,7 @@ Note that
 is automatically started by
 .I mdadm
 when needed and so does not need to be considered when working with
-RAID arrays.  The only times it is run other that by
+RAID arrays.  The only times it is run other than by
 .I  mdadm
 is when the boot scripts need to restart it after mounting the new
 root filesystem.
@@ -208,7 +217,7 @@ and
 .B .sock
 file.  The particular filesystem to use is given to mdmon at compile
 time and defaults to
-.BR /dev/.mdadm .
+.BR /run/mdadm .
 
 This filesystem must persist through to shutdown time.
 
