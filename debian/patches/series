@@ -8,3 +8,4 @@ rebuildmap-strip-local-host-name-from-device-name.patch
 readlink-path.patch
 mdmonitor-service-simplify.diff
 disable-incremental-assembly.patch
+fix-grow-continue.patch

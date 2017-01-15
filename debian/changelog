@@ -1,3 +1,12 @@
+mdadm (3.3.2-5+deb8u2) jessie; urgency=medium
+
+  * Non-maintainer upload.
+  * fix-grow-continue.patch: Port upstream fix to let '--grow --continue'
+    successfully reshape an array when using backup space on a 'spare' device.
+    (Closes: #840743)
+
+ -- Jens Sauer <jsauer65@gmail.com>  Wed, 09 Nov 2016 00:43:48 +0100
+
 mdadm (3.3.2-5+deb8u1) jessie; urgency=medium
 
   * Non-maintainer upload.
